@@ -91,3 +91,56 @@ Troubleshooting
 Notes
 
 - This action uses system Python and installs codex-python wheels from PyPI. If the runner version lacks a compatible wheel, install failures will occur; pin a version with known wheels using codex_python_version if needed.
+
+Edit Commands (Comment-Triggered)
+
+- You can ask the agent to make focused code edits by commenting on the PR with an @codex command. Supported triggers at the start of a comment:
+  - `@codex ...`
+  - `@codex: ...`
+  - `@codex edit: ...`
+  - `/codex ...`
+- The remainder of the comment becomes the instruction for the coding agent. The agent:
+  - Runs with plan + apply_patch tools enabled and AUTO approvals (no manual confirmations).
+  - Applies minimal diffs, updates docs/tests as needed.
+  - Commits with a message like `Codex edit: <first line>` and pushes to the PR head branch.
+  - In dry-run mode, prints intended changes but does not commit/push.
+
+Required workflow events and permissions
+
+Add comment-based triggers and write permissions to your workflow file using this action:
+
+```
+name: Codex Review & Edits
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+permissions:
+  contents: write         # allow commits/pushes
+  pull-requests: write    # allow posting comments/reviews
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Ensure we can push back to the PR head branch
+          fetch-depth: 0
+      - name: Codex autonomous review & edits
+        uses: gersmann/codex-review-action@v1
+        with:
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          model: gpt-5-mini
+          reasoning_effort: medium
+```
+
+Notes and limitations for edits
+
+- The action pushes to the PR head branch using `GITHUB_TOKEN`. For forked PRs, GitHub may block pushing from the base repository workflow; prefer running the workflow within the fork or grant appropriate permissions.
+- The agent writes only within the checked-out workspace. Large refactors should be split into multiple commands.
+- To preview changes without pushing, set input `dry_run: '1'` or comment with instructions and then re-run with dry-run disabled.

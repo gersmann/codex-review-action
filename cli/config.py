@@ -59,12 +59,11 @@ class ReviewConfig:
             except ValueError as e:
                 raise ConfigurationError(f"Invalid PR_NUMBER: {pr_num_str}") from e
 
-        # Model configuration
         model_provider = os.environ.get("CODEX_PROVIDER", "openai").strip().lower()
-        model_name = os.environ.get("CODEX_MODEL", "gpt-4.1-mini").strip()
+        model_name = os.environ.get("CODEX_MODEL", "gpt-5-mini").strip()
         reasoning_effort = os.environ.get("CODEX_REASONING_EFFORT", "medium").strip()
-        fast_model_name = os.environ.get("FAST_MODEL", "gpt-5-mini").strip()
-        fast_reasoning_effort = os.environ.get("FAST_REASONING_EFFORT", "low").strip()
+        fast_model_name = os.environ.get("CODEX_FAST_MODEL", model_name).strip()
+        fast_reasoning_effort = os.environ.get("CODEX_FAST_REASONING_EFFORT", "low").strip()
 
         # Validate model authentication
         if model_provider == "openai":

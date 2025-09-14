@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
+import re
 from typing import Any
 
 from github import Github
 from github.GithubException import GithubException
+from github.PullRequest import PullRequest
+from github.PullRequestComment import PullRequestComment
+from github.IssueComment import IssueComment
 
-from codex.config import ApprovalPolicy, CodexConfig, ReasoningEffort, ToolsConfig
+from codex.config import ApprovalPolicy, CodexConfig, ReasoningEffort
 from codex.native import start_exec_stream as native_start_exec_stream
 
 from .config import ReviewConfig
@@ -59,7 +64,6 @@ class ReviewProcessor:
             model=model,
             model_reasoning_effort=effort_enum,
             model_provider=self.config.model_provider,
-            tools=ToolsConfig(web_search=True),
             # base_instructions=(
             #     "You are a precise code review assistant.\n"
             #     "You must respond with a single JSON object, matching the provided schema exactly.\n"
@@ -147,38 +151,39 @@ class ReviewProcessor:
         repo = gh.get_repo(f"{self.config.owner}/{self.config.repo_name}")
         pr = repo.get_pull(pr_number)
 
-        # Extract PR data and changed files using PyGithub
-        pr_data = getattr(pr, "raw_data", None)
-        if not isinstance(pr_data, dict):
-            pr_data = {
-                "number": pr.number,
-                "state": pr.state,
-                "title": pr.title,
-                "head": {
-                    "sha": getattr(getattr(pr, "head", None), "sha", None),
-                    "label": getattr(getattr(pr, "head", None), "label", ""),
-                },
-                "base": {
-                    "sha": getattr(getattr(pr, "base", None), "sha", None),
-                    "label": getattr(getattr(pr, "base", None), "label", ""),
-                },
-            }
+        # Extract PR data (typed access)
+        if not isinstance(pr, PullRequest):
+            raise ValueError("Expected a PullRequest instance")
+
+        head = pr.head
+        base = pr.base
+        pr_data = {
+            "number": pr.number,
+            "state": pr.state,
+            "title": pr.title or "",
+            "head": {"sha": head.sha if head else None, "label": head.label if head else ""},
+            "base": {"sha": base.sha if base else None, "label": base.label if base else ""},
+        }
 
         changed_files = list(pr.get_files())
+        # Map old->new paths for renamed files so we can anchor against HEAD paths
+        rename_map: dict[str, str] = {}
+        for f in changed_files:
+            try:
+                if getattr(f, "status", "") == "renamed":
+                    prev = getattr(f, "previous_filename", None)
+                    if prev:
+                        rename_map[prev] = getattr(f, "filename", prev)
+            except Exception:
+                pass
 
-        head_sha = getattr(getattr(pr, "head", None), "sha", None) or pr_data.get("head", {}).get(
-            "sha"
-        )
+        head_sha = (head.sha if head else None) or pr_data.get("head", {}).get("sha")
         if not head_sha:
             raise ValueError("Missing head commit SHA")
 
         self._debug(1, f"Changed files: {len(changed_files)}")
         for file in changed_files[:10]:  # Log first 10 files
-            patch_len = (
-                len((getattr(file, "patch", "") or "").splitlines())
-                if getattr(file, "patch", None)
-                else 0
-            )
+            patch_len = len((file.patch or "").splitlines()) if getattr(file, "patch", None) else 0
             self._debug(
                 2,
                 f" - {file.filename} status={getattr(file, 'status', 'modified')} patch_len={patch_len}",
@@ -201,23 +206,234 @@ class ReviewProcessor:
         # Execute Codex
         output = self._run_codex(prompt)
 
-        # Parse JSON response
+        # Parse JSON response (robust to fenced or prefixed/suffixed text)
         try:
-            result = json.loads(output)
+            result = self._parse_json_response(output)
         except json.JSONDecodeError as e:
             print("Model did not return valid JSON:")
             print(output)
             raise CodexExecutionError(f"JSON parsing error: {e}") from e
 
         # Process and post results
-        self._post_results(result, changed_files, repo, pr, head_sha)
+        self._post_results(result, changed_files, repo, pr, head_sha, rename_map)
 
         return result
+
+    def _parse_json_response(self, text: str) -> dict[str, Any]:
+        """Parse a JSON object from model output that may include code fences or extra text.
+
+        Strategy:
+        1) If fenced with ``` or ```json, strip the fences and parse.
+        2) Otherwise, find the first '{' and the last '}' and attempt to parse that slice.
+        3) Raise JSONDecodeError if still invalid.
+        """
+        s = text.strip()
+        fence_match = re.match(r"^```(?:json)?\n([\s\S]*?)\n```\s*$", s)
+        if fence_match:
+            inner = fence_match.group(1)
+            return json.loads(inner)
+
+        # Fallback: extract the outermost JSON object by slicing
+        first = s.find("{")
+        last = s.rfind("}")
+        if first != -1 and last != -1 and last > first:
+            candidate = s[first : last + 1]
+            return json.loads(candidate)
+
+        # Final attempt: remove any lone fences that didn't match above
+        s2 = re.sub(r"^```.*?$|```$", "", s, flags=re.MULTILINE).strip()
+        return json.loads(s2)
+
+    def process_edit_command(self, command_text: str, pr_number: int, comment_ctx: dict | None = None) -> int:
+        """Run a coding-agent edit command against the PR's branch.
+
+        - Enables apply_patch tool and plan tool
+        - Sets approval policy to AUTO so the agent can apply patches without prompts
+        - After the run, commits and pushes changes (unless dry_run)
+        """
+        self._debug(1, f"Edit command on PR #{pr_number}: {command_text[:120]}")
+
+        # Initialize PyGithub and fetch PR for branch info
+        gh = self._gh or Github(login_or_token=self.config.github_token, per_page=100)
+        self._gh = gh
+        repo = gh.get_repo(f"{self.config.owner}/{self.config.repo_name}")
+        pr = repo.get_pull(pr_number)
+        head_branch = pr.head.ref if pr.head else None
+
+        repo_root = self.config.repo_root or Path(".").resolve()
+        instructions = (
+            "You are a coding agent with write access to this repository.\n"
+            f"Repository root: {repo_root}\n"
+            "Follow the user's command below. Make focused changes with minimal diff.\n"
+            "Use the apply_patch tool to edit files. Create directories/files as needed.\n"
+            "Add or update small docs as necessary.\n"
+            "Do not change unrelated code.\n"
+        )
+        prompt = (
+            f"{instructions}\n\nUser command:\n{command_text}\n\n"
+            "When finished, ensure the repo builds/tests if applicable."
+        )
+
+        # Run Codex agent with tools enabled
+        overrides = CodexConfig(
+            approval_policy=ApprovalPolicy.NEVER,
+            include_plan_tool=True,
+            include_apply_patch_tool=True,
+            include_view_image_tool=False,
+            show_raw_agent_reasoning=False,
+            model=self.config.model_name,
+            model_reasoning_effort=ReasoningEffort(self.config.reasoning_effort.lower()),
+            model_provider=self.config.model_provider,
+        ).to_dict()
+
+        agent_last: str | None = None
+        try:
+            stream = native_start_exec_stream(
+                prompt,
+                config_overrides=overrides,
+                load_default_config=False,
+            )
+            # Stream to console if enabled
+            for item in stream:
+                msg = item.get("msg") if isinstance(item, dict) else None
+                msg_type = msg.get("type") if isinstance(msg, dict) else None
+                if self.config.stream_output and msg_type in (
+                    "agent_message",
+                    "agent_message_delta",
+                ):
+                    if isinstance(msg, dict):
+                        text_val = (
+                            msg.get("message") if msg_type == "agent_message" else msg.get("delta")
+                        )
+                        if isinstance(text_val, str):
+                            print(text_val, end="", flush=True)
+                if msg_type == "agent_message":
+                    if isinstance(msg, dict):
+                        _t = msg.get("message")
+                        if isinstance(_t, str):
+                            agent_last = _t
+                if msg_type == "task_complete" and self.config.stream_output:
+                    print("", flush=True)
+        except Exception as e:
+            print(f"Edit execution failed: {e}", file=sys.stderr)
+            try:
+                if comment_ctx:
+                    self._reply_to_comment(repo, pr, comment_ctx, f"Edit failed: {e}")
+            except Exception:
+                pass
+            return 1
+
+        # Commit and push if there are changes
+        try:
+            changed = self._git_has_changes()
+            if not changed:
+                print("No changes to commit.")
+                try:
+                    if comment_ctx:
+                        self._reply_to_comment(
+                            repo,
+                            pr,
+                            comment_ctx,
+                            self._format_edit_reply(agent_last or "(no output)", pushed=False, dry_run=self.config.dry_run, changed=False),
+                        )
+                except Exception:
+                    pass
+                return 0
+            if self.config.dry_run:
+                print("DRY_RUN: would commit and push changes.")
+                self._git_status_pretty()
+                try:
+                    if comment_ctx:
+                        self._reply_to_comment(
+                            repo,
+                            pr,
+                            comment_ctx,
+                            self._format_edit_reply(agent_last or "(no output)", pushed=False, dry_run=True, changed=True),
+                        )
+                except Exception:
+                    pass
+                return 0
+            self._git_setup_identity()
+            self._git_commit_all(f"Codex edit: {command_text.splitlines()[0][:72]}")
+            if head_branch:
+                self._git_push_head_to_branch(head_branch)
+            else:
+                # Fallback: push current branch
+                subprocess.run(["git", "push"], check=True)
+            print("Pushed edits successfully.")
+            try:
+                if comment_ctx:
+                    self._reply_to_comment(
+                        repo,
+                        pr,
+                        comment_ctx,
+                        self._format_edit_reply(agent_last or "(no output)", pushed=True, dry_run=False, changed=True),
+                    )
+            except Exception:
+                pass
+            return 0
+        except subprocess.CalledProcessError as e:
+            print(f"Git operation failed: {e}", file=sys.stderr)
+            try:
+                if comment_ctx:
+                    self._reply_to_comment(repo, pr, comment_ctx, f"Git operation failed: {e}")
+            except Exception:
+                pass
+            return 2
+
+    def _format_edit_reply(self, agent_output: str, *, pushed: bool, dry_run: bool, changed: bool) -> str:
+        status = (
+            "dry-run (no push)" if dry_run else ("pushed changes" if pushed else ("no changes" if not changed else "not pushed"))
+        )
+        header = f"Codex edit result ({status}):"
+        body = (agent_output or "").strip()
+        if len(body) > 3500:
+            body = body[:3500] + "\n\n… (truncated)"
+        return f"{header}\n\n{body}"
+
+    def _reply_to_comment(self, repo, pr, comment_ctx: dict, text: str) -> None:
+        event = (comment_ctx.get("event_name") or "").lower()
+        comment_id = int(comment_ctx.get("id") or 0)
+        if not comment_id:
+            pr.as_issue().create_comment(text)
+            return
+        try:
+            if event == "pull_request_review_comment":
+                url = f"{pr.url}/comments/{comment_id}/replies"
+                pr._requester.requestJsonAndCheck("POST", url, input={"body": text})
+            elif event == "issue_comment":
+                pr.as_issue().create_comment(text)
+            else:
+                pr.as_issue().create_comment(text)
+        except Exception as e:
+            self._debug(1, f"Failed replying to comment {comment_id}: {e}")
+
+    def _git_has_changes(self) -> bool:
+        res = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+        return bool(res.stdout.strip())
+
+    def _git_status_pretty(self) -> None:
+        subprocess.run(["git", "status", "--short"], check=False)
+
+    def _git_setup_identity(self) -> None:
+        subprocess.run(
+            ["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"],
+            check=True,
+        )
+        subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
+
+    def _git_commit_all(self, message: str) -> None:
+        subprocess.run(["git", "add", "-A"], check=True)
+        subprocess.run(["git", "commit", "-m", message], check=True)
+
+    def _git_push_head_to_branch(self, branch: str) -> None:
+        # Push current HEAD to the target branch name on origin (works in detached HEAD)
+        subprocess.run(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], check=True)
 
     def _write_context_artifacts(self, pr, changed_files: list) -> None:
         """Create a `.codex-context` directory with diffs and PR context (including comments)."""
         repo_root = self.config.repo_root or Path(".").resolve()
-        base_dir_name = getattr(self.config, "context_dir_name", ".codex-context") or ".codex-context"
+        base_dir_name = self.config.context_dir_name or ".codex-context"
         base_dir = (repo_root / base_dir_name).resolve()
 
         diffs_dir = base_dir / "diffs"
@@ -226,7 +442,7 @@ class ReviewProcessor:
         # Write combined diffs file and per-file patches
         combined_lines: list[str] = []
         for file in changed_files:
-            filename = getattr(file, "filename", None)
+            filename = file.filename
             patch = getattr(file, "patch", None)
             status = getattr(file, "status", "modified")
             if not filename or not patch:
@@ -240,17 +456,19 @@ class ReviewProcessor:
             target_dir.mkdir(parents=True, exist_ok=True)
             (target_dir / f"{file_path.name}.patch").write_text(patch, encoding="utf-8")
 
-        (base_dir / "combined_diffs.txt").write_text("\n" + ("\n" + ("-" * 80) + "\n").join(combined_lines), encoding="utf-8")
+        (base_dir / "combined_diffs.txt").write_text(
+            "\n" + ("\n" + ("-" * 80) + "\n").join(combined_lines), encoding="utf-8"
+        )
 
         # Write PR metadata and comments into pr.md
         parts: list[str] = []
-        parts.append(f"PR #{getattr(pr, 'number', '')}: {getattr(pr, 'title', '')}")
+        parts.append(f"PR #{pr.number}: {pr.title or ''}")
         parts.append("")
-        parts.append(f"URL: {getattr(pr, 'html_url', '')}")
-        parts.append(f"Author: {getattr(getattr(pr, 'user', None), 'login', '')}")
-        parts.append(f"State: {getattr(pr, 'state', '')}")
+        parts.append(f"URL: {pr.html_url}")
+        parts.append(f"Author: {pr.user.login if pr.user else ''}")
+        parts.append(f"State: {pr.state}")
         parts.append("")
-        body = getattr(pr, "body", "") or ""
+        body = pr.body or ""
         if body:
             parts.append("PR Description:\n")
             parts.append(body)
@@ -264,9 +482,10 @@ class ReviewProcessor:
         if issue_comments:
             parts.append("Issue Comments:")
             for c in issue_comments:
-                author = getattr(getattr(c, "user", None), "login", "")
-                created = getattr(c, "created_at", "")
-                parts.append(f"- [{created}] @{author}:\n{getattr(c, 'body', '')}\n")
+                if isinstance(c, IssueComment):
+                    author = c.user.login if c.user else ""
+                    created = c.created_at
+                    parts.append(f"- [{created}] @{author}:\n{c.body or ''}\n")
 
         # Review comments (inline on diffs)
         try:
@@ -276,11 +495,12 @@ class ReviewProcessor:
         if review_comments:
             parts.append("Review Comments:")
             for rc in review_comments:
-                author = getattr(getattr(rc, "user", None), "login", "")
-                created = getattr(rc, "created_at", "")
-                path = getattr(rc, "path", "")
-                line = getattr(rc, "line", None) or getattr(rc, "original_line", None)
-                parts.append(f"- [{created}] @{author} on {path}:{line}\n{getattr(rc, 'body', '')}\n")
+                if isinstance(rc, PullRequestComment):
+                    author = rc.user.login if rc.user else ""
+                    created = rc.created_at
+                    path = rc.path or ""
+                    line = rc.line or rc.original_line
+                    parts.append(f"- [{created}] @{author} on {path}:{line}\n{rc.body or ''}\n")
 
         (base_dir / "pr.md").write_text("\n".join(parts) + "\n", encoding="utf-8")
 
@@ -291,18 +511,31 @@ class ReviewProcessor:
         repo,
         pr,
         head_sha: str,
+        rename_map: dict[str, str],
     ) -> None:
         """Post review results to GitHub."""
         findings: list[dict[str, Any]] = list(result.get("findings", []) or [])
+        total_findings = len(findings)
         overall = str(result.get("overall_correctness", "")).strip() or "patch is correct"
         overall_explanation = str(result.get("overall_explanation", "")).strip()
         overall_conf = result.get("overall_confidence_score")
 
-        # Compose summary
+        # If this PR already has a Codex review, deduplicate new findings using the fast model
+        try:
+            if self._has_prior_codex_review(pr):
+                existing = self._collect_existing_comment_texts(pr)
+                filtered = self._deduplicate_findings(findings, existing)
+                if isinstance(filtered, list):
+                    print(f"Dedup kept {len(filtered)}/{len(findings)} findings (fast model)")
+                    findings = filtered
+        except Exception as e:
+            self._debug(1, f"Deduplication step failed: {e}")
+
+        # Compose summary using total (pre-dedup) count
         summary_lines = [
             "Codex Autonomous Review:",
             f"- Overall: {overall}",
-            f"- Findings: {len(findings)}",
+            f"- Findings (total): {total_findings}",
         ]
         if overall_explanation:
             summary_lines.append("")
@@ -311,26 +544,15 @@ class ReviewProcessor:
             summary_lines.append(f"Confidence: {overall_conf}")
         summary = "\n".join(summary_lines)
 
-        # If this PR already has a Codex review, deduplicate new findings using the fast model
-        try:
-            if self._has_prior_codex_review(pr):
-                existing = self._collect_existing_comment_texts(pr)
-                filtered = self._deduplicate_findings(findings, existing)
-                if isinstance(filtered, list):
-                    if len(filtered) != len(findings):
-                        print(f"Dedup kept {len(filtered)}/{len(findings)} findings (fast model)")
-                    findings = filtered
-        except Exception as e:
-            self._debug(1, f"Deduplication step failed: {e}")
-
-        # Post review summary
+        # Replace previous summary with a fresh issue comment
         try:
             if self.config.dry_run:
-                self._debug(1, "DRY_RUN: would create PR review")
+                self._debug(1, "DRY_RUN: would delete prior summary (if any) and create a fresh one")
             else:
-                pr.create_review(body=summary, event="COMMENT")
+                self._delete_prior_summary(pr)
+                pr.as_issue().create_comment(summary)
         except GithubException as e:
-            print(f"Failed to post review summary: {e}", file=sys.stderr)
+            print(f"Failed to update summary comment: {e}", file=sys.stderr)
 
         # Build anchor maps for inline comments
         valid_lines_by_path, position_by_path = build_anchor_maps(changed_files)
@@ -344,13 +566,48 @@ class ReviewProcessor:
                     f"Anchor map ready for {file.filename}: valid_lines={valid_count} positions={pos_count}",
                 )
 
-        # Post individual findings
-        self._post_findings(findings, position_by_path, repo, pr, head_sha)
+        # Post individual findings (prefer line/side anchoring with batching; fallback to file-level)
+        self._post_findings(findings, valid_lines_by_path, position_by_path, repo, pr, head_sha, rename_map)
+
+    def _delete_prior_summary(self, pr) -> None:
+        """Delete prior Codex summary comments and dismiss prior summary reviews."""
+        marker = "Codex Autonomous Review:"
+        # Issue comments
+        try:
+            for c in pr.get_issue_comments():
+                body = (getattr(c, "body", "") or "").strip()
+                if marker in body:
+                    try:
+                        c.delete()
+                        self._debug(1, f"Deleted prior summary issue comment id={getattr(c,'id',None)}")
+                    except Exception as e:
+                        self._debug(1, f"Failed to delete issue comment id={getattr(c,'id',None)}: {e}")
+        except Exception as e:
+            self._debug(1, f"Listing issue comments failed: {e}")
+
+        # PR reviews (dismiss)
+        try:
+            requester = getattr(pr, "_requester", None)
+            pr_url = getattr(pr, "url", "")
+            for r in pr.get_reviews():
+                body = (getattr(r, "body", "") or "").strip()
+                if marker in body:
+                    review_id = getattr(r, "id", None)
+                    if requester and pr_url and review_id:
+                        url = f"{pr_url}/reviews/{review_id}/dismissals"
+                        payload = {"message": "Superseded by latest Codex review."}
+                        try:
+                            requester.requestJsonAndCheck("PUT", url, input=payload)
+                            self._debug(1, f"Dismissed prior PR review id={review_id}")
+                        except Exception as e:
+                            self._debug(1, f"Failed to dismiss review id={review_id}: {e}")
+        except Exception as e:
+            self._debug(1, f"Listing/dismissing reviews failed: {e}")
 
     def _has_prior_codex_review(self, pr) -> bool:
         try:
             for rev in pr.get_reviews():
-                body = getattr(rev, "body", "") or ""
+                body = rev.body or ""
                 if "Codex Autonomous Review:" in body:
                     return True
         except Exception:
@@ -358,31 +615,36 @@ class ReviewProcessor:
         # Also check issue comments, in case summary was posted there in previous versions
         try:
             for c in pr.get_issue_comments():
-                if "Codex Autonomous Review:" in (getattr(c, "body", "") or ""):
+                if isinstance(c, IssueComment) and "Codex Autonomous Review:" in (c.body or ""):
                     return True
         except Exception:
             pass
         return False
 
     def _collect_existing_comment_texts(self, pr) -> list[str]:
+        """Collect only file/diff review comments for deduplication.
+
+        Excludes PR-level summaries and issue comments so they don't suppress
+        per-file findings.
+        """
         texts: list[str] = []
         try:
-            for c in pr.get_issue_comments():
-                t = (getattr(c, "body", "") or "").strip()
-                if t:
-                    texts.append(t)
-        except Exception:
-            pass
-        try:
             for rc in pr.get_review_comments():
-                t = (getattr(rc, "body", "") or "").strip()
-                if t:
-                    texts.append(t)
+                if isinstance(rc, PullRequestComment):
+                    body = (rc.body or "").strip()
+                    path = getattr(rc, "path", "") or ""
+                    line = getattr(rc, "line", None) or getattr(rc, "original_line", None)
+                    if body:
+                        loc = f"{path}:{line}" if path and line else path or ""
+                        prefix = f"[{loc}] " if loc else ""
+                        texts.append(prefix + body)
         except Exception:
             pass
         return texts
 
-    def _deduplicate_findings(self, findings: list[dict[str, Any]], existing_comments: list[str]) -> list[dict[str, Any]]:
+    def _deduplicate_findings(
+        self, findings: list[dict[str, Any]], existing_comments: list[str]
+    ) -> list[dict[str, Any]]:
         """Use the fast model to filter out findings already covered by existing comments."""
         # Build compact payload
         compact_findings: list[dict[str, Any]] = []
@@ -401,7 +663,7 @@ class ReviewProcessor:
 
         instructions = (
             "You are deduplicating review comments.\n"
-            "Given `new_findings` and `existing_comments`, return JSON {\"keep\": [indices]} where indices refer to new_findings[index].\n"
+            'Given `new_findings` and `existing_comments`, return JSON {"keep": [indices]} where indices refer to new_findings[index].\n'
             "Consider a new finding a duplicate if an existing comment already conveys the same issue for the same file and nearby lines,\n"
             "or if it is semantically redundant. Prefer recall (keep) when unsure.\n"
         )
@@ -411,7 +673,12 @@ class ReviewProcessor:
             "existing_comments": existing_comments[:200],  # cap to avoid huge prompts
         }
 
-        prompt = instructions + "\n\nINPUT:\n" + json.dumps(payload, ensure_ascii=False) + "\n\nOUTPUT: JSON with only the 'keep' array."
+        prompt = (
+            instructions
+            + "\n\nINPUT:\n"
+            + json.dumps(payload, ensure_ascii=False)
+            + "\n\nOUTPUT: JSON with only the 'keep' array."
+        )
 
         raw = self._run_codex(
             prompt,
@@ -424,7 +691,11 @@ class ReviewProcessor:
             keep = data.get("keep") if isinstance(data, dict) else None
             if not isinstance(keep, list):
                 return findings
-            keep_set = {int(i) for i in keep if isinstance(i, int) or (isinstance(i, str) and str(i).isdigit())}
+            keep_set = {
+                int(i)
+                for i in keep
+                if isinstance(i, int) or (isinstance(i, str) and str(i).isdigit())
+            }
             return [f for i, f in enumerate(findings) if i in keep_set]
         except Exception:
             return findings
@@ -432,13 +703,31 @@ class ReviewProcessor:
     def _post_findings(
         self,
         findings: list[dict[str, Any]],
+        valid_lines_by_path: dict[str, set[int]],
         position_by_path: dict[str, dict[int, int]],
         repo,
         pr,
         head_sha: str,
+        rename_map: dict[str, str],
     ) -> None:
-        """Post individual findings as comments using PyGithub."""
+        """Post findings as review comments (line/side) with robust fallback."""
         repo_root = self.config.repo_root or Path(".").resolve()
+
+        review_items: list[dict] = []
+        file_level_messages: dict[str, list[str]] = {}
+
+        def nearest_valid_line(path: str, target: int) -> int | None:
+            valid = sorted(valid_lines_by_path.get(path, set()))
+            if not valid:
+                return None
+            # Exact hit
+            if target in valid:
+                return target
+            # Pick nearest by absolute distance (cap search window)
+            nearest = min(valid, key=lambda x: (abs(x - target), x))
+            if abs(nearest - target) <= 50:
+                return nearest
+            return None
 
         for finding in findings:
             title = str(finding.get("title", "Issue")).strip()
@@ -456,46 +745,86 @@ class ReviewProcessor:
                 rel_path = str(Path(abs_path).resolve().relative_to(repo_root))
             except ValueError:
                 rel_path = abs_path.lstrip("./")
-
-            # Check if we can anchor the comment
-            pos_map = position_by_path.get(rel_path, {})
-            position = pos_map.get(start_line)
-            can_anchor = position is not None
+            # If this path was renamed in the PR, anchor comments to the new (HEAD) path
+            rel_path = rename_map.get(rel_path, rel_path)
 
             comment_body = f"{title}\n\n{body}"
 
-            try:
-                if self.config.dry_run:
-                    action = "inline" if can_anchor and position is not None else "file-level"
-                    self._debug(1, f"DRY_RUN: would post {action} comment for {rel_path}:{start_line}")
-                    continue
-                if can_anchor and position is not None:
-                    self._debug(
-                        1,
-                        f"Posting inline comment: {rel_path}:{start_line} -> position={position}",
-                    )
-                    commit_obj = repo.get_commit(head_sha)
-                    pr.create_comment(comment_body, commit_obj, rel_path, position)
-                else:
-                    self._debug(
-                        1,
-                        f"Posting file-level comment: {rel_path} (line {start_line} not in diff)",
-                    )
-                    commit_obj = repo.get_commit(head_sha)
-                    try:
-                        pr.create_review_comment(
-                            body=comment_body
-                            + "\n\n(Note: referenced line not in diff; posting at file level.)",
-                            commit=commit_obj,
-                            path=rel_path,
-                            subject_type="file",
-                        )  # type: ignore[arg-type]
-                    except TypeError:
-                        pr.as_issue().create_comment(
-                            f"[File: {rel_path}]\n\n{comment_body}\n\n(Note: referenced line not in diff; posting at file level.)"
-                            )
-                # Small delay to avoid rate limiting
-                time.sleep(0.2)
+            # Determine final line anchor
+            final_line = nearest_valid_line(rel_path, start_line)
 
+            if self.config.dry_run:
+                anchor = f"inline L{final_line}" if final_line else "file-level"
+                self._debug(1, f"DRY_RUN: would post {anchor} comment for {rel_path}:{start_line}")
+                continue
+
+            if final_line:
+                # Use line/side anchoring (RIGHT = head)
+                review_items.append(
+                    {
+                        "path": rel_path,
+                        "line": int(final_line),
+                        "side": "RIGHT",
+                        "body": comment_body,
+                    }
+                )
+            else:
+                # Aggregate file-level fallbacks
+                file_level_messages.setdefault(rel_path, []).append(
+                    self._format_file_level_fallback(rel_path, start_line, head_sha, title, body)
+                )
+
+        # Batch-create a review for inline comments
+        if review_items:
+            try:
+                url = f"{pr.url}/reviews"
+                payload = {"event": "COMMENT", "comments": review_items}
+                pr._requester.requestJsonAndCheck("POST", url, input=payload)
+            except Exception as e:
+                self._debug(1, f"Batch review failed ({e}); attempting per-comment fallback")
+                # Fallback to posting one by one using position-based API
+                commit_obj = repo.get_commit(head_sha)
+                for it in review_items:
+                    try:
+                        # As absolute last resort, attempt position if available
+                        pr.create_comment(it["body"], commit_obj, it["path"], position_by_path.get(it["path"], {}).get(it["line"], 1))
+                        time.sleep(0.2)
+                    except Exception:
+                        pass
+
+        # Post file-level fallbacks as aggregated comments per file
+        for rel_path, chunks in file_level_messages.items():
+            text = "\n\n".join(chunks)
+            try:
+                commit_obj = repo.get_commit(head_sha)
+                try:
+                    pr.create_review_comment(body=text, commit=commit_obj, path=rel_path, subject_type="file")  # type: ignore[arg-type]
+                except TypeError:
+                    pr.as_issue().create_comment(text)
+                time.sleep(0.1)
             except GithubException as e:
-                print(f"Failed to post comment for {rel_path}:{start_line}: {e}", file=sys.stderr)
+                self._debug(1, f"Failed file-level comment for {rel_path}: {e}")
+
+    def _format_file_level_fallback(
+        self, rel_path: str, start_line: int, head_sha: str, title: str, body: str
+    ) -> str:
+        repo_root = self.config.repo_root or Path(".").resolve()
+        snippet = ""
+        try:
+            p = (repo_root / rel_path).resolve()
+            if p.exists() and p.is_file():
+                lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+                idx = max(0, start_line - 1)
+                window = lines[max(0, idx - 3) : min(len(lines), idx + 3)]
+                # Re-number snippet lines relative to file for clarity
+                base = max(1, start_line - 3)
+                numbered = [f"{base + i:>6}: {ln}" for i, ln in enumerate(window)]
+                snippet = "\n".join(numbered)
+        except Exception:
+            pass
+        permalink = f"https://github.com/{self.config.owner}/{self.config.repo_name}/blob/{head_sha}/{rel_path}#L{start_line}"
+        parts = [f"{title}", "", body, "", f"Permalink: {permalink}"]
+        if snippet:
+            parts.extend(["", "Context:", f"```\n{snippet}\n```"])
+        parts.append("\n[fallback: not in diff]")
+        return "\n".join(parts)

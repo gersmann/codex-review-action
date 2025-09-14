@@ -81,8 +81,8 @@ runs:
         # Config
         CODEX_MODEL: ${{ inputs.model }}
         CODEX_REASONING_EFFORT: ${{ inputs.reasoning_effort }}
-        FAST_MODEL: ${{ inputs.fast_model }}
-        FAST_REASONING_EFFORT: ${{ inputs.fast_reasoning_effort }}
+        CODEX_FAST_MODEL: ${{ inputs.fast_model }}
+        CODEX_FAST_REASONING_EFFORT: ${{ inputs.fast_reasoning_effort }}
         DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
         DRY_RUN: ${{ inputs.dry_run }}
         STREAM_AGENT_MESSAGES: ${{ inputs.stream_agent_messages }}

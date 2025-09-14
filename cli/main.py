@@ -180,6 +180,30 @@ def load_github_event() -> dict[str, Any]:
         raise ConfigurationError(f"Failed to load GitHub event data: {e}") from e
 
 
+def extract_edit_command(text: str) -> str | None:
+    """Extract an @codex edit command from a comment body.
+
+    Accepted forms:
+      - "@codex edit: <instructions>"
+      - "@codex: <instructions>"
+      - "@codex <instructions>"
+      - "/codex <instructions>"
+    Returns the instruction text to pass to the coding agent, or None.
+    """
+    if not text:
+        return None
+    t = text.strip()
+    low = t.lower()
+    prefixes = ["@codex", "@codex-bot", "/codex"]
+    for p in prefixes:
+        if low.startswith(p):
+            rest = t[len(p) :].lstrip().lstrip(":").strip()
+            return rest or t
+    if "@codex" in low and "edit" in low:
+        return t
+    return None
+
+
 def main() -> int:
     """Main entry point."""
     parser = create_parser()
@@ -188,16 +212,32 @@ def main() -> int:
     try:
         # Handle GitHub Actions mode
         if args.github_actions or (not args.repository and os.environ.get("GITHUB_ACTIONS")):
-            # GitHub Actions mode - get PR number from event
+            # GitHub Actions mode - support PR + comment-based events
             event = load_github_event()
-            if "pull_request" not in event:
-                raise ConfigurationError("This workflow must be triggered by a pull_request event")
-
-            pr_evt = event["pull_request"]
-            pr_number = int(pr_evt.get("number") or event.get("number") or 0)
+            pr_number = None
+            if isinstance(event.get("pull_request"), dict):
+                pr_number = int(event["pull_request"].get("number") or 0)
+            elif isinstance(event.get("issue"), dict) and event["issue"].get("pull_request"):
+                pr_number = int(event["issue"].get("number") or 0)
+            if not pr_number:
+                raise ConfigurationError("This workflow must be triggered by a PR-related event")
 
             config = ReviewConfig.from_environment()
             config.pr_number = pr_number
+
+            # Comment commands: invoke edit mode if a comment contains an @codex command
+            if isinstance(event.get("comment"), dict):
+                body = str(event["comment"].get("body") or "")
+                cmd = extract_edit_command(body)
+                if cmd:
+                    comment_ctx = {
+                        "id": int(event["comment"].get("id") or 0),
+                        "event_name": os.environ.get("GITHUB_EVENT_NAME", ""),
+                        "author": (event["comment"].get("user") or {}).get("login"),
+                        "body": body,
+                    }
+                    processor = ReviewProcessor(config)
+                    return processor.process_edit_command(cmd, pr_number, comment_ctx)
         else:
             # CLI mode - create config from args
             config_kwargs = {
