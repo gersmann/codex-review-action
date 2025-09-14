@@ -1,0 +1,84 @@
+name: "Codex Autonomous Code Review"
+description: "Run Codex to review a PR and post review comments"
+author: "OpenAI Codex"
+branding:
+  icon: "search"
+  color: "blue"
+
+inputs:
+  openai_api_key:
+    description: "OpenAI API key for the selected model provider"
+    required: false
+  model:
+    description: "Model to use (e.g., gpt-4.1-mini, gpt-5)"
+    required: false
+    default: "gpt-4.1-mini"
+  reasoning_effort:
+    description: "Reasoning effort hint: minimal | low | medium | high"
+    required: false
+    default: "medium"
+  debug_level:
+    description: "Debug verbosity: 0 (off), 1 (basic), 2 (trace)"
+    required: false
+    default: "0"
+  dry_run:
+    description: "If '1', print payloads but do not post comments"
+    required: false
+    default: "0"
+  stream_agent_messages:
+    description: "If '1', stream model output to logs"
+    required: false
+    default: "1"
+  codex_python_version:
+    description: "Version spec for codex-python on PyPI (e.g., '>=0.2.3')"
+    required: false
+    default: ""
+  extra_pip_args:
+    description: "Additional pip arguments (e.g., --index-url)"
+    required: false
+    default: ""
+  prompt_strategy:
+    description: "Which prompt to use: auto | builtin | file | inline"
+    required: false
+    default: "auto"
+  prompt_path:
+    description: "Path to prompt file when using 'file' or 'auto' (default: prompts/code-review.md)"
+    required: false
+    default: "prompts/code-review.md"
+  prompt_inline:
+    description: "Inline prompt content when using 'inline' or 'auto'"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install codex-python from PyPI
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 -m pip install --upgrade pip
+        if [ -n "${{ inputs.codex_python_version }}" ]; then
+          python3 -m pip install ${{ inputs.extra_pip_args }} "codex-python${{ inputs.codex_python_version }}"
+        else
+          python3 -m pip install ${{ inputs.extra_pip_args }} codex-python
+        fi
+
+    - name: Run Codex autonomous review
+      shell: bash
+      env:
+        # Tokens
+        GITHUB_TOKEN: ${{ github.token }}
+        OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        # Config
+        CODEX_MODEL: ${{ inputs.model }}
+        CODEX_REASONING_EFFORT: ${{ inputs.reasoning_effort }}
+        DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        STREAM_AGENT_MESSAGES: ${{ inputs.stream_agent_messages }}
+        REVIEW_PROMPT_STRATEGY: ${{ inputs.prompt_strategy }}
+        REVIEW_PROMPT_PATH: ${{ inputs.prompt_path }}
+        REVIEW_PROMPT_INLINE: ${{ inputs.prompt_inline }}
+      run: |
+        set -euo pipefail
+        python3 "${{ github.action_path }}/scripts/codex_autoreview.py"
