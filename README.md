@@ -61,6 +61,8 @@ This action supports two distinct modes:
 
 Set the mode via the `mode` input parameter.
 
+If you see this line in a code review, comment on this line please with a proposed fix.
+
 ## Review Mode Example
 
 For traditional code review on PR events:
