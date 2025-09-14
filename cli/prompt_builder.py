@@ -19,54 +19,22 @@ class PromptBuilder:
             print(f"[debug{level}] {message}", file=sys.stderr)
 
     def load_guidelines(self) -> str:
-        """Load review guidelines based on configuration strategy.
+        """Load review guidelines from the built-in prompts/review.md file.
 
-        Only used in review mode. Act mode uses built-in instructions in the processor.
+        Only used in review mode. Act mode doesn't use guidelines.
         """
         if self.config.mode != "review":
             return ""  # Act mode doesn't use guidelines from this method
 
-        strategy = self.config.guidelines_strategy
-        inline = self.config.guidelines_inline
-        path = Path(self.config.guidelines_path)
-
-        # Built-in file packaged with the action
+        # Always use the built-in review prompt
         builtin_path = Path(__file__).resolve().parents[1] / "prompts" / "review.md"
 
-        def read_file(file_path: Path) -> str:
-            try:
-                return file_path.read_text(encoding="utf-8")
-            except Exception as e:
-                self._debug(1, f"Failed reading prompt file {file_path}: {e}")
-                raise PromptError(f"Failed to read guidelines file {file_path}: {e}") from e
-
-        def file_exists_and_readable() -> bool:
-            return path.exists() and path.is_file()
-
-        # Strategy-specific loading
-        if strategy == "inline" and inline:
-            self._debug(1, "Using inline prompt (env)")
-            return inline
-
-        if strategy == "file" and file_exists_and_readable():
-            self._debug(1, f"Using file prompt: {path}")
-            return read_file(path)
-
-        if strategy == "builtin":
-            self._debug(1, f"Using builtin prompt: {builtin_path}")
-            return read_file(builtin_path)
-
-        # Auto strategy: prefer inline > file > builtin
-        if inline:
-            self._debug(1, "Using inline prompt (auto)")
-            return inline
-
-        if file_exists_and_readable():
-            self._debug(1, f"Using file prompt (auto): {path}")
-            return read_file(path)
-
-        self._debug(1, f"Using builtin prompt (auto fallback): {builtin_path}")
-        return read_file(builtin_path)
+        try:
+            self._debug(1, f"Using built-in prompt: {builtin_path}")
+            return builtin_path.read_text(encoding="utf-8")
+        except Exception as e:
+            self._debug(1, f"Failed reading built-in prompt file {builtin_path}: {e}")
+            raise PromptError(f"Failed to read built-in guidelines file {builtin_path}: {e}") from e
 
     def compose_prompt(
         self,

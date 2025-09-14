@@ -28,11 +28,6 @@ class ReviewConfig:
     fast_model_name: str = "gpt-5-mini"
     fast_reasoning_effort: str = "low"
 
-    # Review prompt configuration
-    guidelines_strategy: str = "auto"  # auto | inline | file | builtin
-    guidelines_path: str = "prompts/code-review.md"
-    guidelines_inline: str = ""
-
     # Act mode configuration
     act_instructions: str = ""
 
@@ -78,10 +73,6 @@ class ReviewConfig:
         # Act mode configuration
         act_instructions = os.environ.get("CODEX_ACT_INSTRUCTIONS", "").strip()
 
-        # Review guidelines configuration
-        guidelines_strategy = (os.environ.get("REVIEW_PROMPT_STRATEGY") or "auto").strip().lower()
-        guidelines_path = os.environ.get("REVIEW_PROMPT_PATH") or "prompts/code-review.md"
-        guidelines_inline = os.environ.get("REVIEW_PROMPT_INLINE") or ""
 
         # Validate model authentication
         if model_provider == "openai":
@@ -110,9 +101,6 @@ class ReviewConfig:
             fast_model_name=fast_model_name,
             fast_reasoning_effort=fast_reasoning_effort,
             act_instructions=act_instructions,
-            guidelines_strategy=guidelines_strategy,
-            guidelines_path=guidelines_path,
-            guidelines_inline=guidelines_inline,
             debug_level=debug_level,
             stream_output=stream_output,
             dry_run=dry_run,
