@@ -19,7 +19,7 @@ from codex.native import start_exec_stream as native_start_exec_stream
 
 from .config import ReviewConfig
 from .exceptions import CodexExecutionError
-from .patch_parser import build_anchor_maps
+from .patch_parser import build_anchor_maps, annotate_patch_with_line_numbers
 from .prompt_builder import PromptBuilder
 
 
@@ -91,8 +91,9 @@ class ReviewProcessor:
                         d = msg.get("delta")
                         # Print exact single-line event, no extra breaks
                         if isinstance(d, str):
+                            d_one_line = d.replace("\n", "").replace("\r", "")
                             print(
-                                f"[debug1] [codex-event] agent_reasoning_delta: {{'delta': {d!r}, 'type': 'agent_reasoning_delta'}}",
+                                f"[debug1] [codex-event] agent_reasoning_delta: {{'delta': {d_one_line!r}, 'type': 'agent_reasoning_delta'}}",
                                 file=sys.stderr,
                             )
                     else:
@@ -315,8 +316,9 @@ class ReviewProcessor:
                     if msg_type == "agent_reasoning_delta" and isinstance(msg, dict):
                         d = msg.get("delta")
                         if isinstance(d, str):
+                            d_one_line = d.replace("\n", "").replace("\r", "")
                             print(
-                                f"[debug1] [codex-event] agent_reasoning_delta: {{'delta': {d!r}, 'type': 'agent_reasoning_delta'}}",
+                                f"[debug1] [codex-event] agent_reasoning_delta: {{'delta': {d_one_line!r}, 'type': 'agent_reasoning_delta'}}",
                                 file=sys.stderr,
                             )
 
@@ -460,7 +462,9 @@ class ReviewProcessor:
         base_dir = (repo_root / base_dir_name).resolve()
 
         diffs_dir = base_dir / "diffs"
+        annotated_dir = base_dir / "diffs_annotated"
         diffs_dir.mkdir(parents=True, exist_ok=True)
+        annotated_dir.mkdir(parents=True, exist_ok=True)
 
         # Write combined diffs file and per-file patches
         combined_lines: list[str] = []
@@ -478,6 +482,12 @@ class ReviewProcessor:
             target_dir = diffs_dir / file_path.parent
             target_dir.mkdir(parents=True, exist_ok=True)
             (target_dir / f"{file_path.name}.patch").write_text(patch, encoding="utf-8")
+
+            # Also write annotated diff with explicit BASE/HEAD numbers
+            a_target_dir = annotated_dir / file_path.parent
+            a_target_dir.mkdir(parents=True, exist_ok=True)
+            annotated = annotate_patch_with_line_numbers(patch)
+            (a_target_dir / f"{file_path.name}.annotated.patch").write_text(annotated, encoding="utf-8")
 
         (base_dir / "combined_diffs.txt").write_text(
             "\n" + ("\n" + ("-" * 80) + "\n").join(combined_lines), encoding="utf-8"
@@ -579,6 +589,18 @@ class ReviewProcessor:
 
         # Build anchor maps for inline comments
         valid_lines_by_path, position_by_path = build_anchor_maps(changed_files)
+
+        # Persist anchor maps for debugging and line mapping inspection
+        try:
+            repo_root = self.config.repo_root or Path(".").resolve()
+            base_dir = (repo_root / (self.config.context_dir_name or ".codex-context")).resolve()
+            out = {
+                "valid_lines_by_path": {k: sorted(list(v)) for k, v in valid_lines_by_path.items()},
+                "position_by_path": {k: {str(kk): vv for kk, vv in v.items()} for k, v in position_by_path.items()},
+            }
+            (base_dir / "anchor_maps.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
+        except Exception as e:
+            self._debug(1, f"Failed writing anchor_maps.json: {e}")
 
         for file in changed_files:
             if getattr(file, "patch", None):
@@ -767,6 +789,34 @@ class ReviewProcessor:
             pmap = position_by_path.get(path, {})
             return a in pmap and b in pmap
 
+        def refine_anchor_line(path: str, line: int | None) -> int | None:
+            if not line:
+                return None
+            try:
+                p = (repo_root / path).resolve()
+                if not (p.exists() and p.is_file()):
+                    return line
+                lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+                idx = max(0, min(len(lines) - 1, int(line) - 1))
+                if lines[idx].strip():
+                    return line
+                # Prefer previous non-blank within a small window, but only if it’s a valid diff line
+                window = range(max(0, idx - 2), min(len(lines), idx + 3))
+                candidates: list[int] = []
+                valid = valid_lines_by_path.get(path, set())
+                for i in window:
+                    if lines[i].strip():
+                        lno = i + 1
+                        if lno in valid:
+                            candidates.append(lno)
+                if not candidates:
+                    return line
+                # Rank by distance, then prefer smaller line number (earlier line)
+                chosen = min(candidates, key=lambda x: (abs(x - line), x))
+                return chosen
+            except Exception:
+                return line
+
         for finding in findings:
             title = str(finding.get("title", "Issue")).strip()
             body = str(finding.get("body", "")).strip()
@@ -806,6 +856,7 @@ class ReviewProcessor:
             # Multi-line suggestion with explicit range when both endpoints are valid and likely same hunk
             if body_has_suggestion and final_start and final_end and final_start != final_end and both_in_same_hunk(rel_path, final_start, final_end):
                 try:
+                    self._debug(1, f"Posting multi-line comment {rel_path}:{final_start}-{final_end}")
                     url = f"{pr.url}/comments"
                     payload = {
                         "body": comment_body,
@@ -821,9 +872,10 @@ class ReviewProcessor:
                 except Exception as e:
                     self._debug(1, f"Multi-line suggestion post failed: {e}; falling back")
 
-            # Single-line anchor fallback
-            single_line = final_end or final_start
+            # Single-line anchor fallback: prefer the start of the range, refined off blank lines
+            single_line = refine_anchor_line(rel_path, final_start or final_end)
             if single_line:
+                self._debug(1, f"Posting single-line comment {rel_path}:{single_line} (orig {start_line}-{end_line})")
                 safe_body = comment_body if (not body_has_suggestion) else f"{title}\n\n{sanitize_suggestion_for_single_line(body)}"
                 try:
                     url = f"{pr.url}/comments"

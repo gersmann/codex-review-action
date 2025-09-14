@@ -118,3 +118,64 @@ def build_anchor_maps(changed_files: list) -> tuple[dict[str, set[int]], dict[st
             raise PatchParsingError(f"Failed to parse patch for {file.filename}: {e}") from e
 
     return valid_lines_by_path, position_by_path
+
+
+def annotate_patch_with_line_numbers(patch: str) -> str:
+    """Return a human-friendly annotated diff with BASE and HEAD line numbers.
+
+    Format (fixed-width columns):
+      BASE   HEAD   TAG  CONTENT
+      0123          -    removed line
+             0456   +    added line
+      0123  0456         context line
+
+    This is only for debugging/inspection and is NOT sent to the model.
+    """
+    lines_out: list[str] = []
+    i_old = i_new = 0
+
+    def fmt(old: int | None, new: int | None, tag: str, text: str) -> str:
+        b = f"{old:>6}" if isinstance(old, int) and old > 0 else "      "
+        h = f"{new:>6}" if isinstance(new, int) and new > 0 else "      "
+        t = tag if tag in {"+", "-", " ", "@"} else "?"
+        return f"{b}  {h}   {t}  {text}"
+
+    for raw in patch.splitlines():
+        if raw.startswith("@@"):
+            # Header looks like: @@ -a,b +c,d @@ optional
+            try:
+                header = raw.split("@@")[1]
+            except IndexError:
+                header = raw
+            tokens = header.strip().split()
+            plus = next((t for t in tokens if t.startswith("+")), "+0,0")
+            minus = next((t for t in tokens if t.startswith("-")), "-0,0")
+            try:
+                i_new = int(plus[1:].split(",")[0]) - 1
+                i_old = int(minus[1:].split(",")[0]) - 1
+            except (ValueError, IndexError):
+                i_new = i_old = 0
+            lines_out.append(fmt(None, None, "@", raw))
+            continue
+
+        if not raw:
+            lines_out.append(raw)
+            continue
+
+        tag = raw[0]
+        text = raw[1:]
+        if tag == " ":
+            i_old += 1
+            i_new += 1
+            lines_out.append(fmt(i_old, i_new, tag, text))
+        elif tag == "+":
+            i_new += 1
+            lines_out.append(fmt(None, i_new, tag, text))
+        elif tag == "-":
+            i_old += 1
+            lines_out.append(fmt(i_old, None, tag, text))
+        else:
+            # Unknown tag; just echo
+            lines_out.append(raw)
+
+    return "\n".join(lines_out)
