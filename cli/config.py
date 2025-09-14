@@ -35,6 +35,7 @@ class ReviewConfig:
     debug_level: int = 0
     stream_output: bool = True
     dry_run: bool = False
+    include_annotated_in_prompt: bool = False
 
     # Repository paths
     repo_root: Path | None = None
@@ -84,6 +85,7 @@ class ReviewConfig:
         debug_level = _parse_debug_level(os.environ.get("DEBUG_CODEREVIEW", "0"))
         stream_output = os.environ.get("STREAM_AGENT_MESSAGES", "1") != "0"
         dry_run = os.environ.get("DRY_RUN") == "1"
+        include_annotated_in_prompt = (os.environ.get("REVIEW_INCLUDE_ANNOTATED") or "").strip().lower() in ("1", "true", "yes")
 
         # Repository paths
         repo_root = None
@@ -104,6 +106,7 @@ class ReviewConfig:
             debug_level=debug_level,
             stream_output=stream_output,
             dry_run=dry_run,
+            include_annotated_in_prompt=include_annotated_in_prompt,
             repo_root=repo_root,
         )
 

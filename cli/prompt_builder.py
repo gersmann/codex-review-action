@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ReviewConfig
+from .patch_parser import annotate_patch_with_line_numbers
 from .exceptions import PromptError
 
 
@@ -70,6 +71,8 @@ class PromptBuilder:
 
         # Build diff content
         diffs: list[str] = []
+        annotated_diffs: list[str] = []
+        total_patch_lines = 0
         for file in changed_files:
             if not file.patch:
                 continue
@@ -78,6 +81,14 @@ class PromptBuilder:
                 f"Status: {file.status}\n"
                 f"Patch (unified diff):\n---\n{file.patch}\n"
             )
+            total_patch_lines += len(file.patch.splitlines())
+            try:
+                annotated = annotate_patch_with_line_numbers(file.patch)
+                annotated_diffs.append(
+                    f"File: {file.filename}\nAnnotated patch (BASE, HEAD, TAG, CONTENT):\n---\n{annotated}\n"
+                )
+            except Exception:
+                pass
 
         diff_blob = (
             ("\n" + ("\n" + ("-" * 80) + "\n").join(diffs))
@@ -85,13 +96,33 @@ class PromptBuilder:
             else "\n(no diff patch content available)\n"
         )
 
+        # Tighten line-selection guidance
+        line_rules = (
+            "Line selection rules:\n"
+            "- Always use HEAD (right side) line numbers for code_location.\n"
+            "- Prefer the exact added line(s) that contain the problematic code/text, not surrounding blanks.\n"
+            "- Never select a trailing blank line. If your intended target is a blank line, shift to the nearest non-blank line (prefer earlier).\n"
+            "- Keep ranges minimal; for single-line issues, set start=end to the single non-blank line.\n"
+            "- Your line_range must overlap a visible + or context line in the diff hunk.\n"
+            "- When you quote text in the body, align code_location.start to the line that contains that quote.\n"
+        )
+
+        include_annotated = self.config.include_annotated_in_prompt or (self.config.debug_level >= 2)
+        include_annotated = include_annotated and (total_patch_lines <= 4000)
+
         prompt = (
             f"{intro}\n\n"
             "Review guidelines (verbatim):\n"
             f"{guidelines}\n\n"
+            f"{line_rules}\n"
             f"{context}\n"
             "Changed files and patches:\n"
             f"{diff_blob}\n\n"
+            + (
+                ("Annotated patches with explicit HEAD line numbers:\n" + ("\n" + ("\n" + ("-" * 80) + "\n").join(annotated_diffs)) + "\n\n")
+                if (include_annotated and annotated_diffs)
+                else ""
+            )
             "Respond now with the JSON schema output only."
         )
 
