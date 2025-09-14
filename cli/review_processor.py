@@ -87,7 +87,7 @@ class ReviewProcessor:
                 msg_type = msg.get("type") if isinstance(msg, dict) else None
 
                 if self.config.debug_level >= 1:
-                    if msg_type == "agent_reasoning_delta" and isinstance(msg, dict):
+                    if msg_type in ("agent_reasoning_delta", "agent_message_delta") and isinstance(msg, dict):
                         d = msg.get("delta")
                         if isinstance(d, str):
                             # Emit only the raw text, no wrappers or newlines
@@ -310,7 +310,7 @@ class ReviewProcessor:
                 msg = item.get("msg") if isinstance(item, dict) else None
                 msg_type = msg.get("type") if isinstance(msg, dict) else None
                 if self.config.debug_level >= 1:
-                    if msg_type == "agent_reasoning_delta" and isinstance(msg, dict):
+                    if msg_type in ("agent_reasoning_delta", "agent_message_delta") and isinstance(msg, dict):
                         d = msg.get("delta")
                         if isinstance(d, str):
                             d_one_line = d.replace("\n", "").replace("\r", "")
