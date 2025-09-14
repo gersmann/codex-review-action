@@ -64,7 +64,7 @@ runs:
           python3 -m pip install PyGithub ${{ inputs.extra_pip_args }} codex-python
         fi
 
-    - name: Run Codex autonomous review
+    - name: Run Codex autonomous review (CLI)
       shell: bash
       env:
         # Tokens
@@ -81,4 +81,6 @@ runs:
         REVIEW_PROMPT_INLINE: ${{ inputs.prompt_inline }}
       run: |
         set -euo pipefail
-        python3 "${{ github.action_path }}/scripts/codex_autoreview.py"
+        # Execute the CLI directly; it detects GitHub Actions via env
+        PYTHONPATH="${{ github.action_path }}:${PYTHONPATH:-}" \
+          python3 -m cli.main
