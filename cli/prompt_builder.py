@@ -6,6 +6,7 @@ from typing import Any
 
 from .config import ReviewConfig
 from .exceptions import PromptError
+from .patch_parser import annotate_patch_with_line_numbers
 
 
 class PromptBuilder:
@@ -81,7 +82,14 @@ class PromptBuilder:
                 f"Patch (unified diff):\n---\n{file.patch}\n"
             )
             total_patch_lines += len(file.patch.splitlines())
-            # Annotated patches disabled by default (no dependency on annotate helper)
+            # Build annotated patch with explicit BASE/HEAD numbering for optional inclusion
+            try:
+                annotated = annotate_patch_with_line_numbers(file.patch)
+                annotated_diffs.append(
+                    f"File: {file.filename}\nAnnotated patch (BASE, HEAD, TAG, CONTENT):\n---\n{annotated}\n"
+                )
+            except Exception:
+                pass
 
         diff_blob = (
             ("\n" + ("\n" + ("-" * 80) + "\n").join(diffs))
