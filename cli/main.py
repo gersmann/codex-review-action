@@ -71,6 +71,15 @@ Environment Variables:
         help="GitHub API token (or use GITHUB_TOKEN env var)",
     )
 
+    # Mode configuration
+    parser.add_argument(
+        "--mode",
+        dest="mode",
+        choices=["review", "act"],
+        default="review",
+        help="Operation mode: 'review' (code review) or 'act' (autonomous editing) (default: review)",
+    )
+
     # Model configuration
     parser.add_argument(
         "--provider",
@@ -82,8 +91,8 @@ Environment Variables:
     parser.add_argument(
         "--model",
         dest="model_name",
-        default="gpt-5-mini",
-        help="Model name (default: gpt-5-mini)",
+        default="gpt-5",
+        help="Model name (default: gpt-5)",
     )
     parser.add_argument(
         "--reasoning-effort",
@@ -107,22 +116,11 @@ Environment Variables:
         help="Reasoning effort for fast model (default: low)",
     )
 
-    # Guidelines configuration
+    # Act mode configuration
     parser.add_argument(
-        "--guidelines-strategy",
-        choices=["auto", "inline", "file", "builtin"],
-        default="auto",
-        help="Guidelines loading strategy (default: auto)",
-    )
-    parser.add_argument(
-        "--guidelines-file",
-        dest="guidelines_path",
-        help="Path to guidelines file",
-    )
-    parser.add_argument(
-        "--guidelines-inline",
-        dest="guidelines_inline",
-        help="Inline guidelines text",
+        "--act-instructions",
+        dest="act_instructions",
+        help="Additional instructions for act mode (autonomous editing)",
     )
 
     # Output configuration

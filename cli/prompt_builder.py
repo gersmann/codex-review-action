@@ -19,7 +19,13 @@ class PromptBuilder:
             print(f"[debug{level}] {message}", file=sys.stderr)
 
     def load_guidelines(self) -> str:
-        """Load review guidelines based on configuration strategy."""
+        """Load review guidelines based on configuration strategy.
+
+        Only used in review mode. Act mode uses built-in instructions in the processor.
+        """
+        if self.config.mode != "review":
+            return ""  # Act mode doesn't use guidelines from this method
+
         strategy = self.config.guidelines_strategy
         inline = self.config.guidelines_inline
         path = Path(self.config.guidelines_path)

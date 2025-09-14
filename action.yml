@@ -6,13 +6,17 @@ branding:
   color: "blue"
 
 inputs:
+  mode:
+    description: "Operation mode: 'review' (code review) or 'act' (autonomous editing)"
+    required: false
+    default: "review"
   openai_api_key:
     description: "OpenAI API key for the selected model provider"
     required: false
   model:
-    description: "Model to use (e.g., gpt-4.1-mini, gpt-5)"
+    description: "Model to use (e.g., gpt-5, gpt-4.1-mini)"
     required: false
-    default: "gpt-4.1-mini"
+    default: "gpt-5"
   reasoning_effort:
     description: "Reasoning effort hint: minimal | low | medium | high"
     required: false
@@ -25,36 +29,28 @@ inputs:
     description: "If '1', print payloads but do not post comments"
     required: false
     default: "0"
-    stream_agent_messages:
-      description: "If '1', stream model output to logs"
-      required: false
-      default: "1"
+  stream_agent_messages:
+    description: "If '1', stream model output to logs"
+    required: false
+    default: "1"
   fast_model:
-    description: "Fast model for deduplication on repeated runs"
+    description: "Fast model for deduplication on repeated runs (review mode only)"
     required: false
     default: "gpt-5-mini"
   fast_reasoning_effort:
-    description: "Reasoning effort for fast model"
+    description: "Reasoning effort for fast model (review mode only)"
     required: false
     default: "low"
+  act_instructions:
+    description: "Additional instructions for act mode (autonomous editing)"
+    required: false
+    default: ""
   codex_python_version:
     description: "Version spec for codex-python on PyPI (e.g., '>=0.2.3')"
     required: false
     default: ""
   extra_pip_args:
     description: "Additional pip arguments (e.g., --index-url)"
-    required: false
-    default: ""
-  prompt_strategy:
-    description: "Which prompt to use: auto | builtin | file | inline"
-    required: false
-    default: "auto"
-  prompt_path:
-    description: "Path to prompt file when using 'file' or 'auto' (default: prompts/code-review.md)"
-    required: false
-    default: "prompts/code-review.md"
-  prompt_inline:
-    description: "Inline prompt content when using 'inline' or 'auto'"
     required: false
     default: ""
 
@@ -79,16 +75,15 @@ runs:
         GITHUB_TOKEN: ${{ github.token }}
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
         # Config
+        CODEX_MODE: ${{ inputs.mode }}
         CODEX_MODEL: ${{ inputs.model }}
         CODEX_REASONING_EFFORT: ${{ inputs.reasoning_effort }}
         CODEX_FAST_MODEL: ${{ inputs.fast_model }}
         CODEX_FAST_REASONING_EFFORT: ${{ inputs.fast_reasoning_effort }}
+        CODEX_ACT_INSTRUCTIONS: ${{ inputs.act_instructions }}
         DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
         DRY_RUN: ${{ inputs.dry_run }}
         STREAM_AGENT_MESSAGES: ${{ inputs.stream_agent_messages }}
-        REVIEW_PROMPT_STRATEGY: ${{ inputs.prompt_strategy }}
-        REVIEW_PROMPT_PATH: ${{ inputs.prompt_path }}
-        REVIEW_PROMPT_INLINE: ${{ inputs.prompt_inline }}
       run: |
         set -euo pipefail
         # Execute the CLI directly; it detects GitHub Actions via env

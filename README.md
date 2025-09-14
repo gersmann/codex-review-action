@@ -24,7 +24,7 @@ Quick start
           uses: gersmann/codex-review-action@latest
           with:
             openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-            model: gpt-4.1-mini
+            model: gpt-5
             reasoning_effort: medium
             debug_level: 1
 
@@ -48,7 +48,7 @@ Quick start
           uses: gersmann/codex-review-action@v1
           with:
             openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-            model: gpt-4.1-mini
+            model: gpt-5
             reasoning_effort: medium
             debug_level: 1
 
@@ -68,7 +68,7 @@ Requirements
 Inputs
 
 - openai_api_key (string, required): OpenAI API key.
-- model (string, default gpt-4.1-mini): Model to use (e.g., gpt-5, gpt-4o-mini).
+- model (string, default gpt-5): Model to use (e.g., gpt-5, gpt-4o-mini).
 - reasoning_effort (string, default medium): minimal | low | medium | high.
 - debug_level (string, default 0): 0 (off), 1 (basic), 2 (trace HTTP + anchoring).
 - dry_run (string, default 0): if 1, prints payloads but does not post comments.
@@ -85,7 +85,7 @@ What it posts
 Troubleshooting
 
 - 422 Unprocessable Entity on comments: The action uses diff positions (not line/side). If a line isn’t in the diff, it falls back to a file-level comment.
-- Model errors (builder error): Ensure model input is valid for your key; try model: gpt-4.1-mini.
+- Model errors (builder error): Ensure model input is valid for your key; try model: gpt-5.
 - No prompt file: Ensure prompts/code-review.md exists in the target repository.
 
 Notes

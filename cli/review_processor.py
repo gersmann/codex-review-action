@@ -87,17 +87,26 @@ class ReviewProcessor:
                 msg_type = msg.get("type") if isinstance(msg, dict) else None
 
                 if self.config.debug_level >= 1:
-                    detail = None
-                    if isinstance(msg, dict) and msg_type in (
-                        "error",
-                        "stream_error",
-                        "background_event",
-                    ):
-                        detail = msg.get("message")
-                    if detail:
-                        self._debug(1, f"[codex-event] {msg_type}: {detail}")
+                    if msg_type == "agent_reasoning_delta" and isinstance(msg, dict):
+                        d = msg.get("delta")
+                        # Print exact single-line event, no extra breaks
+                        if isinstance(d, str):
+                            print(
+                                f"[debug1] [codex-event] agent_reasoning_delta: {{'delta': {d!r}, 'type': 'agent_reasoning_delta'}}",
+                                file=sys.stderr,
+                            )
                     else:
-                        self._debug(1, f"[codex-event] {msg_type}: {msg}")
+                        detail = None
+                        if isinstance(msg, dict) and msg_type in (
+                            "error",
+                            "stream_error",
+                            "background_event",
+                        ):
+                            detail = msg.get("message")
+                        if detail:
+                            self._debug(1, f"[codex-event] {msg_type}: {detail}")
+                        else:
+                            self._debug(1, f"[codex-event] {msg_type}: {msg}")
 
                 if msg_type == "agent_message":
                     text = msg.get("message") if isinstance(msg, dict) else None
@@ -261,7 +270,7 @@ class ReviewProcessor:
         head_branch = pr.head.ref if pr.head else None
 
         repo_root = self.config.repo_root or Path(".").resolve()
-        instructions = (
+        base_instructions = (
             "You are a coding agent with write access to this repository.\n"
             f"Repository root: {repo_root}\n"
             "Follow the user's command below. Make focused changes with minimal diff.\n"
@@ -269,6 +278,11 @@ class ReviewProcessor:
             "Add or update small docs as necessary.\n"
             "Do not change unrelated code.\n"
         )
+
+        # Add custom act instructions if provided
+        instructions = base_instructions
+        if self.config.act_instructions:
+            instructions += f"\n{self.config.act_instructions}\n"
         prompt = (
             f"{instructions}\n\nUser command:\n{command_text}\n\n"
             "When finished, ensure the repo builds/tests if applicable."
@@ -297,6 +311,15 @@ class ReviewProcessor:
             for item in stream:
                 msg = item.get("msg") if isinstance(item, dict) else None
                 msg_type = msg.get("type") if isinstance(msg, dict) else None
+                if self.config.debug_level >= 1:
+                    if msg_type == "agent_reasoning_delta" and isinstance(msg, dict):
+                        d = msg.get("delta")
+                        if isinstance(d, str):
+                            print(
+                                f"[debug1] [codex-event] agent_reasoning_delta: {{'delta': {d!r}, 'type': 'agent_reasoning_delta'}}",
+                                file=sys.stderr,
+                            )
+
                 if self.config.stream_output and msg_type in (
                     "agent_message",
                     "agent_message_delta",
@@ -710,24 +733,39 @@ class ReviewProcessor:
         head_sha: str,
         rename_map: dict[str, str],
     ) -> None:
-        """Post findings as review comments (line/side) with robust fallback."""
+        """Post findings with correct anchoring and safer suggestions.
+
+        - Prefer per-comment "line/side" API (supports start_line for multi-line).
+        - Fallback to single-line inline comments if the full range is not in the diff.
+        - As last resort, post a file-level comment with context and permalink.
+        - Never include a multi-line ```suggestion block unless we anchor start_line/line.
+        """
         repo_root = self.config.repo_root or Path(".").resolve()
 
-        review_items: list[dict] = []
         file_level_messages: dict[str, list[str]] = {}
+
+        def has_suggestion(text: str) -> bool:
+            return "```suggestion" in text
+
+        def sanitize_suggestion_for_single_line(text: str) -> str:
+            if "```suggestion" not in text:
+                return text
+            return text.replace("```suggestion", "```diff")
 
         def nearest_valid_line(path: str, target: int) -> int | None:
             valid = sorted(valid_lines_by_path.get(path, set()))
             if not valid:
                 return None
-            # Exact hit
             if target in valid:
                 return target
-            # Pick nearest by absolute distance (cap search window)
             nearest = min(valid, key=lambda x: (abs(x - target), x))
             if abs(nearest - target) <= 50:
                 return nearest
             return None
+
+        def both_in_same_hunk(path: str, a: int, b: int) -> bool:
+            pmap = position_by_path.get(path, {})
+            return a in pmap and b in pmap
 
         for finding in findings:
             title = str(finding.get("title", "Issue")).strip()
@@ -735,7 +773,8 @@ class ReviewProcessor:
             location = finding.get("code_location", {}) or {}
             abs_path = str(location.get("absolute_file_path", "")).strip()
             line_range = location.get("line_range", {}) or {}
-            start_line = int(line_range.get("start", 0))
+            start_line = int(line_range.get("start", 0) or 0)
+            end_line = int(line_range.get("end", start_line) or start_line)
 
             if not abs_path or start_line <= 0:
                 continue
@@ -745,52 +784,75 @@ class ReviewProcessor:
                 rel_path = str(Path(abs_path).resolve().relative_to(repo_root))
             except ValueError:
                 rel_path = abs_path.lstrip("./")
-            # If this path was renamed in the PR, anchor comments to the new (HEAD) path
             rel_path = rename_map.get(rel_path, rel_path)
+
+            body_has_suggestion = has_suggestion(body)
+            final_start = nearest_valid_line(rel_path, start_line)
+            final_end = nearest_valid_line(rel_path, end_line)
+            if final_start and final_end and final_start > final_end:
+                final_start, final_end = final_end, final_start
 
             comment_body = f"{title}\n\n{body}"
 
-            # Determine final line anchor
-            final_line = nearest_valid_line(rel_path, start_line)
-
             if self.config.dry_run:
-                anchor = f"inline L{final_line}" if final_line else "file-level"
-                self._debug(1, f"DRY_RUN: would post {anchor} comment for {rel_path}:{start_line}")
+                anchor = (
+                    f"inline L{final_start}-{final_end}" if (final_start and final_end) else (
+                        f"inline L{final_end or final_start}" if (final_end or final_start) else "file-level"
+                    )
+                )
+                self._debug(1, f"DRY_RUN: would post {anchor} comment for {rel_path}:{start_line}-{end_line}")
                 continue
 
-            if final_line:
-                # Use line/side anchoring (RIGHT = head)
-                review_items.append(
-                    {
-                        "path": rel_path,
-                        "line": int(final_line),
-                        "side": "RIGHT",
+            # Multi-line suggestion with explicit range when both endpoints are valid and likely same hunk
+            if body_has_suggestion and final_start and final_end and final_start != final_end and both_in_same_hunk(rel_path, final_start, final_end):
+                try:
+                    url = f"{pr.url}/comments"
+                    payload = {
                         "body": comment_body,
+                        "commit_id": head_sha,
+                        "path": rel_path,
+                        "side": "RIGHT",
+                        "start_line": int(final_start),
+                        "line": int(final_end),
                     }
-                )
-            else:
-                # Aggregate file-level fallbacks
-                file_level_messages.setdefault(rel_path, []).append(
-                    self._format_file_level_fallback(rel_path, start_line, head_sha, title, body)
-                )
+                    pr._requester.requestJsonAndCheck("POST", url, input=payload)
+                    time.sleep(0.05)
+                    continue
+                except Exception as e:
+                    self._debug(1, f"Multi-line suggestion post failed: {e}; falling back")
 
-        # Batch-create a review for inline comments
-        if review_items:
-            try:
-                url = f"{pr.url}/reviews"
-                payload = {"event": "COMMENT", "comments": review_items}
-                pr._requester.requestJsonAndCheck("POST", url, input=payload)
-            except Exception as e:
-                self._debug(1, f"Batch review failed ({e}); attempting per-comment fallback")
-                # Fallback to posting one by one using position-based API
-                commit_obj = repo.get_commit(head_sha)
-                for it in review_items:
+            # Single-line anchor fallback
+            single_line = final_end or final_start
+            if single_line:
+                safe_body = comment_body if (not body_has_suggestion) else f"{title}\n\n{sanitize_suggestion_for_single_line(body)}"
+                try:
+                    url = f"{pr.url}/comments"
+                    payload = {
+                        "body": safe_body,
+                        "commit_id": head_sha,
+                        "path": rel_path,
+                        "side": "RIGHT",
+                        "line": int(single_line),
+                    }
+                    pr._requester.requestJsonAndCheck("POST", url, input=payload)
+                    time.sleep(0.05)
+                    continue
+                except Exception as e:
+                    self._debug(1, f"Single-line post failed: {e}; trying position-based fallback")
                     try:
-                        # As absolute last resort, attempt position if available
-                        pr.create_comment(it["body"], commit_obj, it["path"], position_by_path.get(it["path"], {}).get(it["line"], 1))
-                        time.sleep(0.2)
-                    except Exception:
-                        pass
+                        commit_obj = repo.get_commit(head_sha)
+                        pos = position_by_path.get(rel_path, {}).get(int(single_line), None)
+                        if pos is not None:
+                            pr.create_comment(safe_body, commit_obj, rel_path, pos)
+                            time.sleep(0.05)
+                            continue
+                    except Exception as e2:
+                        self._debug(1, f"Position-based fallback failed: {e2}")
+
+            # Aggregate file-level fallback
+            file_level_messages.setdefault(rel_path, []).append(
+                self._format_file_level_fallback(rel_path, start_line, head_sha, title, body)
+            )
 
         # Post file-level fallbacks as aggregated comments per file
         for rel_path, chunks in file_level_messages.items():

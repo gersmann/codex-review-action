@@ -17,18 +17,24 @@ class ReviewConfig:
     repository: str
     pr_number: int | None = None
 
+    # Mode configuration
+    mode: str = "review"  # "review" or "act"
+
     # Model configuration
     model_provider: str = "openai"
-    model_name: str = "gpt-4.1-mini"
+    model_name: str = "gpt-5"
     reasoning_effort: str = "medium"
-    # Fast model for deduplication on repeated runs
+    # Fast model for deduplication on repeated runs (review mode only)
     fast_model_name: str = "gpt-5-mini"
     fast_reasoning_effort: str = "low"
 
-    # Review configuration
-    guidelines_strategy: str = "auto"
+    # Review prompt configuration
+    guidelines_strategy: str = "auto"  # auto | inline | file | builtin
     guidelines_path: str = "prompts/code-review.md"
     guidelines_inline: str = ""
+
+    # Act mode configuration
+    act_instructions: str = ""
 
     # Output configuration
     debug_level: int = 0
@@ -59,21 +65,29 @@ class ReviewConfig:
             except ValueError as e:
                 raise ConfigurationError(f"Invalid PR_NUMBER: {pr_num_str}") from e
 
+        # Mode configuration
+        mode = os.environ.get("CODEX_MODE", "review").strip().lower()
+
+        # Model configuration
         model_provider = os.environ.get("CODEX_PROVIDER", "openai").strip().lower()
-        model_name = os.environ.get("CODEX_MODEL", "gpt-5-mini").strip()
+        model_name = os.environ.get("CODEX_MODEL", "gpt-5").strip()
         reasoning_effort = os.environ.get("CODEX_REASONING_EFFORT", "medium").strip()
         fast_model_name = os.environ.get("CODEX_FAST_MODEL", model_name).strip()
         fast_reasoning_effort = os.environ.get("CODEX_FAST_REASONING_EFFORT", "low").strip()
+
+        # Act mode configuration
+        act_instructions = os.environ.get("CODEX_ACT_INSTRUCTIONS", "").strip()
+
+        # Review guidelines configuration
+        guidelines_strategy = (os.environ.get("REVIEW_PROMPT_STRATEGY") or "auto").strip().lower()
+        guidelines_path = os.environ.get("REVIEW_PROMPT_PATH") or "prompts/code-review.md"
+        guidelines_inline = os.environ.get("REVIEW_PROMPT_INLINE") or ""
 
         # Validate model authentication
         if model_provider == "openai":
             if not os.environ.get("OPENAI_API_KEY"):
                 raise ConfigurationError("Missing OPENAI_API_KEY for model provider 'openai'")
 
-        # Guidelines configuration
-        guidelines_strategy = (os.environ.get("REVIEW_PROMPT_STRATEGY") or "auto").strip().lower()
-        guidelines_path = os.environ.get("REVIEW_PROMPT_PATH") or "prompts/code-review.md"
-        guidelines_inline = os.environ.get("REVIEW_PROMPT_INLINE") or ""
 
         # Output configuration
         debug_level = _parse_debug_level(os.environ.get("DEBUG_CODEREVIEW", "0"))
@@ -89,11 +103,13 @@ class ReviewConfig:
             github_token=github_token,
             repository=repository,
             pr_number=pr_number,
+            mode=mode,
             model_provider=model_provider,
             model_name=model_name,
             reasoning_effort=reasoning_effort,
             fast_model_name=fast_model_name,
             fast_reasoning_effort=fast_reasoning_effort,
+            act_instructions=act_instructions,
             guidelines_strategy=guidelines_strategy,
             guidelines_path=guidelines_path,
             guidelines_inline=guidelines_inline,
@@ -131,8 +147,9 @@ class ReviewConfig:
         if self.pr_number is not None and self.pr_number <= 0:
             raise ConfigurationError("PR number must be positive")
 
-        if self.guidelines_strategy not in ("auto", "inline", "file", "builtin"):
-            raise ConfigurationError(f"Invalid guidelines strategy: {self.guidelines_strategy}")
+        if self.mode not in ("review", "act"):
+            raise ConfigurationError(f"Invalid mode: {self.mode}. Must be 'review' or 'act'")
+
 
         if self.debug_level < 0:
             raise ConfigurationError("Debug level must be non-negative")

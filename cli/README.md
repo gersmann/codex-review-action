@@ -81,7 +81,7 @@ Comment-triggered edits
 |----------|-------------|---------|
 | `GITHUB_TOKEN` | GitHub API token | *Required* |
 | `OPENAI_API_KEY` | OpenAI API key | *Required for OpenAI* |
-| `CODEX_MODEL` | Model name | `gpt-5-mini` |
+| `CODEX_MODEL` | Model name | `gpt-5` |
 | `CODEX_PROVIDER` | Model provider | `openai` |
 | `CODEX_REASONING_EFFORT` | Reasoning effort level | `medium` |
 | `CODEX_FAST_MODEL` | Fast model for dedup on repeated runs | `gpt-5-mini` |
