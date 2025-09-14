@@ -1,4 +1,4 @@
-name: "Codex Autonomous Code Review"
+name: "Codex Code Review & Actor"
 description: "Run Codex to review a PR and post review comments"
 author: "OpenAI Codex"
 branding:
@@ -56,7 +56,7 @@ inputs:
   include_annotated:
     description: "Include annotated diffs with explicit HEAD line numbers in the model prompt (true/false)"
     required: false
-    default: "false"
+    default: "true"
 
 runs:
   using: "composite"

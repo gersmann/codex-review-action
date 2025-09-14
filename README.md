@@ -1,4 +1,4 @@
-Codex Autonomous Code Review (Reusable Action)
+# Codex Code Review & Actor
 
 This reusable GitHub Action runs the Codex agent to review a pull request using built-in review guidelines, then posts a summary and precise inline review comments using the GitHub API.
 
@@ -140,7 +140,7 @@ Inputs
 - act_instructions: additional instructions in act mode
 - codex_python_version: pip version specifier for codex-python
 - extra_pip_args: additional pip flags
-- include_annotated: true|false; include annotated diffs with HEAD line numbers in the model prompt (default: false)
+- include_annotated: true|false; include annotated diffs with HEAD line numbers in the model prompt (default: true)
 
 What it posts
 

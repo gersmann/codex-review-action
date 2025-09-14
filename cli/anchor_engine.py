@@ -187,9 +187,7 @@ def resolve_range(
     start_final = _nearest_line(requested_start, added_nb) or _nearest_line(
         requested_start, valid_nb
     )
-    end_final = _nearest_line(requested_end, added_nb) or _nearest_line(
-        requested_end, valid_nb
-    )
+    end_final = _nearest_line(requested_end, added_nb) or _nearest_line(requested_end, valid_nb)
 
     if start_final is None and end_final is None:
         return None

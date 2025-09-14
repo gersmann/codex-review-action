@@ -296,18 +296,13 @@ class ReviewProcessor:
         # Enable file writes within the repo root and network access for dependency ops.
         # Fall back gracefully if sandbox types are not available in this codex-python version.
         approval = ApprovalPolicy.NEVER
-        sandbox_mode = SandboxMode.WORKSPACE_WRITE
-        sandbox_ws = (
-            SandboxWorkspaceWrite(
-                writable_roots=[str(repo_root)],
-                network_access=True,
-                exclude_tmpdir_env_var=False,
-                exclude_slash_tmp=False,
-            )
-            if SandboxWorkspaceWrite and sandbox_mode is not None
-            else None
+        sandbox_mode = SandboxMode.DANGER_FULL_ACCESS
+        sandbox_ws = SandboxWorkspaceWrite(
+            writable_roots=[str(repo_root)],
+            network_access=True,
+            exclude_tmpdir_env_var=False,
+            exclude_slash_tmp=False,
         )
-
         overrides = CodexConfig(
             approval_policy=approval,
             include_plan_tool=True,
