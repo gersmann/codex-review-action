@@ -19,7 +19,8 @@ from codex.native import start_exec_stream as native_start_exec_stream
 
 from .config import ReviewConfig
 from .exceptions import CodexExecutionError
-from .patch_parser import build_anchor_maps, annotate_patch_with_line_numbers
+from .patch_parser import annotate_patch_with_line_numbers
+from .anchor_engine import build_maps as build_anchor_maps, resolve_range
 from .prompt_builder import PromptBuilder
 
 
@@ -581,32 +582,25 @@ class ReviewProcessor:
         except GithubException as e:
             print(f"Failed to update summary comment: {e}", file=sys.stderr)
 
-        # Build anchor maps for inline comments
-        valid_lines_by_path, position_by_path = build_anchor_maps(changed_files)
+        # Build anchor maps for inline comments (deterministic)
+        file_maps = build_anchor_maps(changed_files)
 
         # Persist anchor maps for debugging and line mapping inspection
         try:
             repo_root = self.config.repo_root or Path(".").resolve()
             base_dir = (repo_root / (self.config.context_dir_name or ".codex-context")).resolve()
-            out = {
-                "valid_lines_by_path": {k: sorted(list(v)) for k, v in valid_lines_by_path.items()},
-                "position_by_path": {k: {str(kk): vv for kk, vv in v.items()} for k, v in position_by_path.items()},
-            }
+            out = {k: {
+                "valid_head_lines": sorted(list(v.valid_head_lines)),
+                "added_head_lines": sorted(list(v.added_head_lines)),
+                "positions_by_head_line": {str(kk): vv for kk, vv in v.positions_by_head_line.items()},
+                "hunks": v.hunks,
+            } for k, v in file_maps.items()}
             (base_dir / "anchor_maps.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
         except Exception as e:
             self._debug(1, f"Failed writing anchor_maps.json: {e}")
 
-        for file in changed_files:
-            if getattr(file, "patch", None):
-                valid_count = len(valid_lines_by_path.get(file.filename, set()))
-                pos_count = len(position_by_path.get(file.filename, {}))
-                self._debug(
-                    2,
-                    f"Anchor map ready for {file.filename}: valid_lines={valid_count} positions={pos_count}",
-                )
-
-        # Post individual findings (prefer line/side anchoring with batching; fallback to file-level)
-        self._post_findings(findings, valid_lines_by_path, position_by_path, repo, pr, head_sha, rename_map)
+        # Post findings using single-comment API only (no batch, no file-level fallback)
+        self._post_findings(findings, file_maps, repo, pr, head_sha, rename_map)
 
     def _delete_prior_summary(self, pr) -> None:
         """Delete prior Codex summary comments and dismiss prior summary reviews."""
@@ -742,202 +736,73 @@ class ReviewProcessor:
     def _post_findings(
         self,
         findings: list[dict[str, Any]],
-        valid_lines_by_path: dict[str, set[int]],
-        position_by_path: dict[str, dict[int, int]],
+        file_maps: dict,
         repo,
         pr,
         head_sha: str,
         rename_map: dict[str, str],
     ) -> None:
-        """Post findings with correct anchoring and safer suggestions.
-
-        - Prefer per-comment "line/side" API (supports start_line for multi-line).
-        - Fallback to single-line inline comments if the full range is not in the diff.
-        - As last resort, post a file-level comment with context and permalink.
-        - Never include a multi-line ```suggestion block unless we anchor start_line/line.
-        """
+        """Post findings using deterministic anchors via single-comment API only."""
         repo_root = self.config.repo_root or Path(".").resolve()
-
-        file_level_messages: dict[str, list[str]] = {}
-
-        def has_suggestion(text: str) -> bool:
-            return "```suggestion" in text
-
-        def sanitize_suggestion_for_single_line(text: str) -> str:
-            if "```suggestion" not in text:
-                return text
-            return text.replace("```suggestion", "```diff")
-
-        def nearest_valid_line(path: str, target: int) -> int | None:
-            valid = sorted(valid_lines_by_path.get(path, set()))
-            if not valid:
-                return None
-            if target in valid:
-                return target
-            nearest = min(valid, key=lambda x: (abs(x - target), x))
-            if abs(nearest - target) <= 50:
-                return nearest
-            return None
-
-        def both_in_same_hunk(path: str, a: int, b: int) -> bool:
-            pmap = position_by_path.get(path, {})
-            return a in pmap and b in pmap
-
-        def refine_anchor_line(path: str, line: int | None) -> int | None:
-            if not line:
-                return None
-            try:
-                p = (repo_root / path).resolve()
-                if not (p.exists() and p.is_file()):
-                    return line
-                lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
-                idx = max(0, min(len(lines) - 1, int(line) - 1))
-                if lines[idx].strip():
-                    return line
-                # Prefer previous non-blank within a small window, but only if it’s a valid diff line
-                window = range(max(0, idx - 2), min(len(lines), idx + 3))
-                candidates: list[int] = []
-                valid = valid_lines_by_path.get(path, set())
-                for i in window:
-                    if lines[i].strip():
-                        lno = i + 1
-                        if lno in valid:
-                            candidates.append(lno)
-                if not candidates:
-                    return line
-                # Rank by distance, then prefer smaller line number (earlier line)
-                chosen = min(candidates, key=lambda x: (abs(x - line), x))
-                return chosen
-            except Exception:
-                return line
 
         for finding in findings:
             title = str(finding.get("title", "Issue")).strip()
             body = str(finding.get("body", "")).strip()
             location = finding.get("code_location", {}) or {}
             abs_path = str(location.get("absolute_file_path", "")).strip()
-            line_range = location.get("line_range", {}) or {}
-            start_line = int(line_range.get("start", 0) or 0)
-            end_line = int(line_range.get("end", start_line) or start_line)
+            rng = location.get("line_range", {}) or {}
+            start_line = int(rng.get("start", 0) or 0)
+            end_line = int(rng.get("end", start_line) or start_line)
 
             if not abs_path or start_line <= 0:
                 continue
 
-            # Convert absolute path to relative
+            # Convert absolute path to repo-relative
             try:
                 rel_path = str(Path(abs_path).resolve().relative_to(repo_root))
             except ValueError:
                 rel_path = abs_path.lstrip("./")
             rel_path = rename_map.get(rel_path, rel_path)
 
-            body_has_suggestion = has_suggestion(body)
-            final_start = nearest_valid_line(rel_path, start_line)
-            final_end = nearest_valid_line(rel_path, end_line)
-            if final_start and final_end and final_start > final_end:
-                final_start, final_end = final_end, final_start
-
-            comment_body = f"{title}\n\n{body}"
-
-            if self.config.dry_run:
-                anchor = (
-                    f"inline L{final_start}-{final_end}" if (final_start and final_end) else (
-                        f"inline L{final_end or final_start}" if (final_end or final_start) else "file-level"
-                    )
-                )
-                self._debug(1, f"DRY_RUN: would post {anchor} comment for {rel_path}:{start_line}-{end_line}")
+            fmap = file_maps.get(rel_path)
+            if not fmap:
                 continue
 
-            # Multi-line suggestion with explicit range when both endpoints are valid and likely same hunk
-            if body_has_suggestion and final_start and final_end and final_start != final_end and both_in_same_hunk(rel_path, final_start, final_end):
-                try:
-                    self._debug(1, f"Posting multi-line comment {rel_path}:{final_start}-{final_end}")
-                    url = f"{pr.url}/comments"
-                    payload = {
-                        "body": comment_body,
-                        "commit_id": head_sha,
-                        "path": rel_path,
-                        "side": "RIGHT",
-                        "start_line": int(final_start),
-                        "line": int(final_end),
-                    }
-                    pr._requester.requestJsonAndCheck("POST", url, input=payload)
-                    time.sleep(0.05)
-                    continue
-                except Exception as e:
-                    self._debug(1, f"Multi-line suggestion post failed: {e}; falling back")
+            has_suggestion = "```suggestion" in body
+            anchor = resolve_range(rel_path, start_line, end_line, has_suggestion, fmap)
+            if not anchor:
+                if self.config.dry_run:
+                    self._debug(1, f"DRY_RUN: would skip (no anchor) for {rel_path}:{start_line}-{end_line}")
+                continue
 
-            # Single-line anchor fallback: prefer the start of the range, refined off blank lines
-            single_line = refine_anchor_line(rel_path, final_start or final_end)
-            if single_line:
-                self._debug(1, f"Posting single-line comment {rel_path}:{single_line} (orig {start_line}-{end_line})")
-                safe_body = comment_body if (not body_has_suggestion) else f"{title}\n\n{sanitize_suggestion_for_single_line(body)}"
-                try:
-                    url = f"{pr.url}/comments"
-                    payload = {
-                        "body": safe_body,
-                        "commit_id": head_sha,
-                        "path": rel_path,
-                        "side": "RIGHT",
-                        "line": int(single_line),
-                    }
-                    pr._requester.requestJsonAndCheck("POST", url, input=payload)
-                    time.sleep(0.05)
-                    continue
-                except Exception as e:
-                    self._debug(1, f"Single-line post failed: {e}; trying position-based fallback")
-                    try:
-                        commit_obj = repo.get_commit(head_sha)
-                        pos = position_by_path.get(rel_path, {}).get(int(single_line), None)
-                        if pos is not None:
-                            pr.create_review_comment(
-                                body=safe_body,
-                                commit=commit_obj,
-                                path=rel_path,
-                                position=pos,
-                            )
-                            time.sleep(0.05)
-                            continue
-                    except Exception as e2:
-                        self._debug(1, f"Position-based fallback failed: {e2}")
+            final_body = body
+            if has_suggestion and not (anchor.get("allow_suggestion") and anchor.get("kind") == "range"):
+                final_body = body.replace("```suggestion", "```diff")
 
-            # Aggregate file-level fallback
-            file_level_messages.setdefault(rel_path, []).append(
-                self._format_file_level_fallback(rel_path, start_line, head_sha, title, body)
-            )
+            comment_body = f"{title}\n\n{final_body}" if final_body else title
 
-        # Post file-level fallbacks as aggregated comments per file
-        for rel_path, chunks in file_level_messages.items():
-            text = "\n\n".join(chunks)
+            if self.config.dry_run:
+                if anchor["kind"] == "range":
+                    self._debug(1, f"DRY_RUN: would post RANGE {rel_path}:{anchor['start_line']}-{anchor['end_line']}")
+                else:
+                    self._debug(1, f"DRY_RUN: would post SINGLE {rel_path}:{anchor['line']}")
+                continue
+
+            url = f"{pr.url}/comments"
+            payload = {
+                "body": comment_body,
+                "commit_id": head_sha,
+                "path": rel_path,
+                "side": "RIGHT",
+            }
+            if anchor["kind"] == "range":
+                payload["start_line"] = int(anchor["start_line"])
+                payload["line"] = int(anchor["end_line"])
+            else:
+                payload["line"] = int(anchor["line"])
+
             try:
-                commit_obj = repo.get_commit(head_sha)
-                try:
-                    pr.create_review_comment(body=text, commit=commit_obj, path=rel_path, subject_type="file")  # type: ignore[arg-type]
-                except TypeError:
-                    pr.as_issue().create_comment(text)
-                time.sleep(0.1)
-            except GithubException as e:
-                self._debug(1, f"Failed file-level comment for {rel_path}: {e}")
-
-    def _format_file_level_fallback(
-        self, rel_path: str, start_line: int, head_sha: str, title: str, body: str
-    ) -> str:
-        repo_root = self.config.repo_root or Path(".").resolve()
-        snippet = ""
-        try:
-            p = (repo_root / rel_path).resolve()
-            if p.exists() and p.is_file():
-                lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
-                idx = max(0, start_line - 1)
-                window = lines[max(0, idx - 3) : min(len(lines), idx + 3)]
-                # Re-number snippet lines relative to file for clarity
-                base = max(1, start_line - 3)
-                numbered = [f"{base + i:>6}: {ln}" for i, ln in enumerate(window)]
-                snippet = "\n".join(numbered)
-        except Exception:
-            pass
-        permalink = f"https://github.com/{self.config.owner}/{self.config.repo_name}/blob/{head_sha}/{rel_path}#L{start_line}"
-        parts = [f"{title}", "", body, "", f"Permalink: {permalink}"]
-        if snippet:
-            parts.extend(["", "Context:", f"```\n{snippet}\n```"])
-        parts.append("\n[fallback: not in diff]")
-        return "\n".join(parts)
+                pr._requester.requestJsonAndCheck("POST", url, input=payload)
+                time.sleep(0.05)
+            except Exception as e:
+                self._debug(1, f"Failed to post comment for {rel_path}: {e}")
