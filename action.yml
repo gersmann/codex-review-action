@@ -59,9 +59,9 @@ runs:
         set -euo pipefail
         python3 -m pip install --upgrade pip
         if [ -n "${{ inputs.codex_python_version }}" ]; then
-          python3 -m pip install ${{ inputs.extra_pip_args }} "codex-python${{ inputs.codex_python_version }}"
+          python3 -m pip install PyGithub ${{ inputs.extra_pip_args }} "codex-python${{ inputs.codex_python_version }}"
         else
-          python3 -m pip install ${{ inputs.extra_pip_args }} codex-python
+          python3 -m pip install PyGithub ${{ inputs.extra_pip_args }} codex-python
         fi
 
     - name: Run Codex autonomous review
