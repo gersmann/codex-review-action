@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from .config import ReviewConfig
-from .patch_parser import annotate_patch_with_line_numbers
 from .exceptions import PromptError
 
 
@@ -82,13 +81,7 @@ class PromptBuilder:
                 f"Patch (unified diff):\n---\n{file.patch}\n"
             )
             total_patch_lines += len(file.patch.splitlines())
-            try:
-                annotated = annotate_patch_with_line_numbers(file.patch)
-                annotated_diffs.append(
-                    f"File: {file.filename}\nAnnotated patch (BASE, HEAD, TAG, CONTENT):\n---\n{annotated}\n"
-                )
-            except Exception:
-                pass
+            # Annotated patches disabled by default (no dependency on annotate helper)
 
         diff_blob = (
             ("\n" + ("\n" + ("-" * 80) + "\n").join(diffs))
@@ -123,7 +116,7 @@ class PromptBuilder:
                 if (include_annotated and annotated_diffs)
                 else ""
             )
-            "Respond now with the JSON schema output only."
+            + "Respond now with the JSON schema output only."
         )
 
         return prompt

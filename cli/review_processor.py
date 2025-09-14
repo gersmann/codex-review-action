@@ -89,12 +89,10 @@ class ReviewProcessor:
                 if self.config.debug_level >= 1:
                     if msg_type == "agent_reasoning_delta" and isinstance(msg, dict):
                         d = msg.get("delta")
-                        # Print exact single-line event, no extra breaks
                         if isinstance(d, str):
-                            print(
-                                f"[debug1] [codex-event] agent_reasoning_delta: {{'delta': {d!r}, 'type': 'agent_reasoning_delta'}}",
-                                file=sys.stderr,
-                            )
+                            # Emit only the raw text, no wrappers or newlines
+                            d_one_line = d.replace("\n", "").replace("\r", "")
+                            print(d_one_line, end="", file=sys.stderr)
                     else:
                         detail = None
                         if isinstance(msg, dict) and msg_type in (
@@ -315,10 +313,8 @@ class ReviewProcessor:
                     if msg_type == "agent_reasoning_delta" and isinstance(msg, dict):
                         d = msg.get("delta")
                         if isinstance(d, str):
-                            print(
-                                f"[debug1] [codex-event] agent_reasoning_delta: {{'delta': {d!r}, 'type': 'agent_reasoning_delta'}}",
-                                file=sys.stderr,
-                            )
+                            d_one_line = d.replace("\n", "").replace("\r", "")
+                            print(d_one_line, end="", file=sys.stderr)
 
                 if self.config.stream_output and msg_type in (
                     "agent_message",
