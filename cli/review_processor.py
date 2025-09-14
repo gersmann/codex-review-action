@@ -89,13 +89,10 @@ class ReviewProcessor:
                 if self.config.debug_level >= 1:
                     if msg_type == "agent_reasoning_delta" and isinstance(msg, dict):
                         d = msg.get("delta")
-                        # Print exact single-line event, no extra breaks
                         if isinstance(d, str):
+                            # Emit only the raw text, no wrappers or newlines
                             d_one_line = d.replace("\n", "").replace("\r", "")
-                            print(
-                                f"[debug1] [codex-event] agent_reasoning_delta: {{'delta': {d_one_line!r}, 'type': 'agent_reasoning_delta'}}",
-                                file=sys.stderr,
-                            )
+                            print(d_one_line, end="", file=sys.stderr)
                     else:
                         detail = None
                         if isinstance(msg, dict) and msg_type in (
@@ -317,10 +314,7 @@ class ReviewProcessor:
                         d = msg.get("delta")
                         if isinstance(d, str):
                             d_one_line = d.replace("\n", "").replace("\r", "")
-                            print(
-                                f"[debug1] [codex-event] agent_reasoning_delta: {{'delta': {d_one_line!r}, 'type': 'agent_reasoning_delta'}}",
-                                file=sys.stderr,
-                            )
+                            print(d_one_line, end="", file=sys.stderr)
 
                 if self.config.stream_output and msg_type in (
                     "agent_message",
@@ -895,7 +889,12 @@ class ReviewProcessor:
                         commit_obj = repo.get_commit(head_sha)
                         pos = position_by_path.get(rel_path, {}).get(int(single_line), None)
                         if pos is not None:
-                            pr.create_comment(safe_body, commit_obj, rel_path, pos)
+                            pr.create_review_comment(
+                                body=safe_body,
+                                commit=commit_obj,
+                                path=rel_path,
+                                position=pos,
+                            )
                             time.sleep(0.05)
                             continue
                     except Exception as e2:

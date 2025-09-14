@@ -143,6 +143,12 @@ Environment Variables:
         action="store_true",
         help="Don't post comments, just show what would be posted",
     )
+    parser.add_argument(
+        "--include-annotated",
+        dest="include_annotated_in_prompt",
+        action="store_true",
+        help="Include annotated diffs with HEAD line numbers in the prompt",
+    )
 
     # Repository configuration
     parser.add_argument(
