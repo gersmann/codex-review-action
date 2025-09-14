@@ -10,6 +10,7 @@ from typing import Any
 
 try:
     from .config import ReviewConfig
+    from .edit_processor import EditProcessor
     from .exceptions import CodexReviewError, ConfigurationError
     from .review_processor import ReviewProcessor
 except ImportError:
@@ -19,6 +20,7 @@ except ImportError:
 
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
     from cli.config import ReviewConfig
+    from cli.edit_processor import EditProcessor
     from cli.exceptions import CodexReviewError, ConfigurationError
     from cli.review_processor import ReviewProcessor
 
@@ -237,8 +239,8 @@ def main() -> int:
                         "author": (event["comment"].get("user") or {}).get("login"),
                         "body": body,
                     }
-                    processor = ReviewProcessor(config)
-                    return processor.process_edit_command(cmd, pr_number, comment_ctx)
+                    edit_processor = EditProcessor(config)
+                    return edit_processor.process_edit_command(cmd, pr_number, comment_ctx)
         else:
             # CLI mode - create config from args
             config_kwargs = {
@@ -252,16 +254,28 @@ def main() -> int:
         # Validate configuration
         config.validate()
 
-        # Create and run processor
-        processor = ReviewProcessor(config)
-        result = processor.process_review()
+        # Branch by mode
+        if config.mode == "act":
+            if not config.pr_number:
+                raise ConfigurationError("--pr is required in act mode")
+            if not (config.act_instructions or "").strip():
+                raise ConfigurationError("--act-instructions is required in act mode")
 
-        # Print summary
-        findings_count = len(result.get("findings", []))
-        overall = result.get("overall_correctness", "unknown")
-        print(f"\nReview completed: {overall}, {findings_count} findings")
+            edit_processor = EditProcessor(config)
+            return edit_processor.process_edit_command(
+                config.act_instructions, config.pr_number, comment_ctx=None
+            )
+        else:
+            # Review mode (default)
+            processor = ReviewProcessor(config)
+            result = processor.process_review()
 
-        return 0
+            # Print summary
+            findings_count = len(result.get("findings", []))
+            overall = result.get("overall_correctness", "unknown")
+            print(f"\nReview completed: {overall}, {findings_count} findings")
+
+            return 0
 
     except KeyboardInterrupt:
         print("\nInterrupted by user", file=sys.stderr)

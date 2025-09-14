@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -14,20 +12,13 @@ from github.IssueComment import IssueComment
 from github.PullRequest import PullRequest
 from github.PullRequestComment import PullRequestComment
 
-from codex.config import (
-    ApprovalPolicy,
-    CodexConfig,
-    ReasoningEffort,
-    SandboxMode,
-    SandboxWorkspaceWrite,
-)
-from codex.native import start_exec_stream as native_start_exec_stream
-
 from .anchor_engine import build_maps as build_anchor_maps
 from .anchor_engine import resolve_range
+from .codex_client import CodexClient
 from .config import ReviewConfig
+from .context_manager import ContextManager
+from .edit_processor import EditProcessor
 from .exceptions import CodexExecutionError
-from .patch_parser import annotate_patch_with_line_numbers
 from .prompt_builder import PromptBuilder
 
 
@@ -37,115 +28,14 @@ class ReviewProcessor:
     def __init__(self, config: ReviewConfig) -> None:
         self.config = config
         self.prompt_builder = PromptBuilder(config)
+        self.codex_client = CodexClient(config)
+        self.context_manager = ContextManager()
+        self.edit_processor = EditProcessor(config)
         self._gh: Github | None = None
 
     def _debug(self, level: int, message: str) -> None:
         if self.config.debug_level >= level:
             print(f"[debug{level}] {message}", file=sys.stderr)
-
-    def _run_codex(
-        self,
-        prompt: str,
-        *,
-        model_name: str | None = None,
-        reasoning_effort: str | None = None,
-        suppress_stream: bool = False,
-    ) -> str:
-        """Execute Codex with the given prompt and return the response.
-
-        model_name/reasoning_effort override the defaults for fast dedup passes.
-        When suppress_stream is True, do not print streamed tokens to stdout.
-        """
-        model = (model_name or self.config.model_name) or self.config.model_name
-        effort_str = (reasoning_effort or self.config.reasoning_effort or "").lower() or "medium"
-        try:
-            effort_enum: ReasoningEffort | None = ReasoningEffort(effort_str)
-        except ValueError:
-            effort_enum = None
-
-        overrides = CodexConfig(
-            approval_policy=ApprovalPolicy.NEVER,
-            include_plan_tool=False,
-            include_apply_patch_tool=False,
-            include_view_image_tool=False,
-            show_raw_agent_reasoning=False,
-            model=model,
-            model_reasoning_effort=effort_enum,
-            model_provider=self.config.model_provider,
-        ).to_dict()
-
-        last_msg: str | None = None
-        buf_parts: list[str] = []
-
-        try:
-            stream = native_start_exec_stream(
-                prompt,
-                config_overrides=overrides,
-                load_default_config=False,
-            )
-
-            for item in stream:
-                msg = item.get("msg") if isinstance(item, dict) else None
-                msg_type = msg.get("type") if isinstance(msg, dict) else None
-
-                if self.config.debug_level >= 1:
-                    if msg_type in ("agent_reasoning_delta", "agent_message_delta") and isinstance(
-                        msg, dict
-                    ):
-                        d = msg.get("delta")
-                        if isinstance(d, str):
-                            # Emit only the raw text, no wrappers or newlines
-                            d_one_line = d.replace("\n", "").replace("\r", "")
-                            print(d_one_line, end="", file=sys.stderr)
-                    else:
-                        detail = None
-                        if isinstance(msg, dict) and msg_type in (
-                            "error",
-                            "stream_error",
-                            "background_event",
-                        ):
-                            detail = msg.get("message")
-                        if detail:
-                            self._debug(1, f"[codex-event] {msg_type}: {detail}")
-                        else:
-                            self._debug(1, f"[codex-event] {msg_type}: {msg}")
-
-                if msg_type == "agent_message":
-                    text = msg.get("message") if isinstance(msg, dict) else None
-                    if isinstance(text, str):
-                        last_msg = text
-                        buf_parts.append(text)
-                        if self.config.stream_output and not suppress_stream:
-                            if buf_parts:
-                                print("", file=sys.stdout)
-                            print(text, end="", flush=True)
-
-                elif msg_type == "agent_message_delta":
-                    delta = msg.get("delta") if isinstance(msg, dict) else None
-                    if isinstance(delta, str):
-                        buf_parts.append(delta)
-                        if self.config.stream_output and not suppress_stream:
-                            print(delta, end="", flush=True)
-
-                elif msg_type == "task_complete":
-                    last_agent_message = (
-                        msg.get("last_agent_message") if isinstance(msg, dict) else None
-                    )
-                    if isinstance(last_agent_message, str) and not last_msg:
-                        last_msg = last_agent_message
-                    if self.config.stream_output and not suppress_stream:
-                        print("", file=sys.stdout, flush=True)
-
-        except Exception as e:
-            raise CodexExecutionError(f"Codex execution failed: {e}") from e
-
-        if not last_msg:
-            combined = "".join(buf_parts).strip()
-            if combined:
-                return combined
-            raise CodexExecutionError("Codex did not return an agent message.")
-
-        return last_msg
 
     def process_review(self, pr_number: int | None = None) -> dict[str, Any]:
         """Process a code review for the given pull request."""
@@ -202,7 +92,11 @@ class ReviewProcessor:
 
         # Prepare local context artifacts (diffs + PR contents with comments)
         try:
-            self._write_context_artifacts(pr, changed_files)
+            repo_root = self.config.repo_root or Path(".").resolve()
+            context_dir_name = self.config.context_dir_name or ".codex-context"
+            self.context_manager.write_context_artifacts(
+                pr, changed_files, repo_root, context_dir_name
+            )
         except Exception as e:
             # Non-fatal: continue review even if context writing fails
             self._debug(1, f"Failed to write context artifacts: {e}")
@@ -215,11 +109,11 @@ class ReviewProcessor:
         print("Running Codex to generate review findings...", flush=True)
 
         # Execute Codex
-        output = self._run_codex(prompt)
+        output = self.codex_client.execute(prompt)
 
         # Parse JSON response (robust to fenced or prefixed/suffixed text)
         try:
-            result = self._parse_json_response(output)
+            result = self.codex_client.parse_json_response(output)
         except json.JSONDecodeError as e:
             print("Model did not return valid JSON:")
             print(output)
@@ -229,345 +123,6 @@ class ReviewProcessor:
         self._post_results(result, changed_files, repo, pr, head_sha, rename_map)
 
         return result
-
-    def _parse_json_response(self, text: str) -> dict[str, Any]:
-        """Parse a JSON object from model output that may include code fences or extra text.
-
-        Strategy:
-        1) If fenced with ``` or ```json, strip the fences and parse.
-        2) Otherwise, find the first '{' and the last '}' and attempt to parse that slice.
-        3) Raise JSONDecodeError if still invalid.
-        """
-        s = text.strip()
-        fence_match = re.match(r"^```(?:json)?\n([\s\S]*?)\n```\s*$", s)
-        if fence_match:
-            inner = fence_match.group(1)
-            return json.loads(inner)
-
-        # Fallback: extract the outermost JSON object by slicing
-        first = s.find("{")
-        last = s.rfind("}")
-        if first != -1 and last != -1 and last > first:
-            candidate = s[first : last + 1]
-            return json.loads(candidate)
-
-        # Final attempt: remove any lone fences that didn't match above
-        s2 = re.sub(r"^```.*?$|```$", "", s, flags=re.MULTILINE).strip()
-        return json.loads(s2)
-
-    def process_edit_command(
-        self, command_text: str, pr_number: int, comment_ctx: dict | None = None
-    ) -> int:
-        """Run a coding-agent edit command against the PR's branch.
-
-        - Enables apply_patch tool and plan tool
-        - Sets approval policy to AUTO so the agent can apply patches without prompts
-        - After the run, commits and pushes changes (unless dry_run)
-        """
-        self._debug(1, f"Edit command on PR #{pr_number}: {command_text[:120]}")
-
-        # Initialize PyGithub and fetch PR for branch info
-        gh = self._gh or Github(login_or_token=self.config.github_token, per_page=100)
-        self._gh = gh
-        repo = gh.get_repo(f"{self.config.owner}/{self.config.repo_name}")
-        pr = repo.get_pull(pr_number)
-        head_branch = pr.head.ref if pr.head else None
-
-        repo_root = self.config.repo_root or Path(".").resolve()
-        base_instructions = (
-            "You are a coding agent with write access to this repository.\n"
-            f"Repository root: {repo_root}\n"
-            "Follow the user's command below. Make focused changes with minimal diff.\n"
-            "Use the apply_patch tool to edit files. Create directories/files as needed.\n"
-            "Add or update small docs as necessary.\n"
-            "Do not change unrelated code.\n"
-        )
-
-        # Add custom act instructions if provided
-        instructions = base_instructions
-        if self.config.act_instructions:
-            instructions += f"\n{self.config.act_instructions}\n"
-        prompt = (
-            f"{instructions}\n\nUser command:\n{command_text}\n\n"
-            "When finished, ensure the repo builds/tests if applicable."
-        )
-
-        # Run Codex agent with tools enabled and a writable workspace sandbox (act mode)
-        # Enable file writes within the repo root and network access for dependency ops.
-        # Fall back gracefully if sandbox types are not available in this codex-python version.
-        approval = ApprovalPolicy.NEVER
-        sandbox_mode = SandboxMode.DANGER_FULL_ACCESS
-        sandbox_ws = SandboxWorkspaceWrite(
-            writable_roots=[str(repo_root)],
-            network_access=True,
-            exclude_tmpdir_env_var=False,
-            exclude_slash_tmp=False,
-        )
-        overrides = CodexConfig(
-            approval_policy=approval,
-            include_plan_tool=True,
-            include_apply_patch_tool=True,
-            include_view_image_tool=False,
-            show_raw_agent_reasoning=False,
-            model=self.config.model_name,
-            model_reasoning_effort=ReasoningEffort(self.config.reasoning_effort.lower()),
-            model_provider=self.config.model_provider,
-            sandbox_mode=sandbox_mode,
-            sandbox_workspace_write=sandbox_ws,
-        ).to_dict()
-
-        agent_last: str | None = None
-        try:
-            stream = native_start_exec_stream(
-                prompt,
-                config_overrides=overrides,
-                load_default_config=False,
-            )
-            # Stream to console if enabled
-            for item in stream:
-                msg = item.get("msg") if isinstance(item, dict) else None
-                msg_type = msg.get("type") if isinstance(msg, dict) else None
-                if self.config.debug_level >= 1:
-                    if msg_type in ("agent_reasoning_delta", "agent_message_delta") and isinstance(
-                        msg, dict
-                    ):
-                        d = msg.get("delta")
-                        if isinstance(d, str):
-                            d_one_line = d.replace("\n", "").replace("\r", "")
-                            print(d_one_line, end="", file=sys.stderr)
-
-                if self.config.stream_output and msg_type in (
-                    "agent_message",
-                    "agent_message_delta",
-                ):
-                    if isinstance(msg, dict):
-                        text_val = (
-                            msg.get("message") if msg_type == "agent_message" else msg.get("delta")
-                        )
-                        if isinstance(text_val, str):
-                            print(text_val, end="", flush=True)
-                if msg_type == "agent_message":
-                    if isinstance(msg, dict):
-                        _t = msg.get("message")
-                        if isinstance(_t, str):
-                            agent_last = _t
-                if msg_type == "task_complete" and self.config.stream_output:
-                    print("", flush=True)
-        except Exception as e:
-            print(f"Edit execution failed: {e}", file=sys.stderr)
-            try:
-                if comment_ctx:
-                    self._reply_to_comment(repo, pr, comment_ctx, f"Edit failed: {e}")
-            except Exception:
-                pass
-            return 1
-
-        # Commit and push if there are changes
-        try:
-            changed = self._git_has_changes()
-            if not changed:
-                print("No changes to commit.")
-                try:
-                    if comment_ctx:
-                        self._reply_to_comment(
-                            repo,
-                            pr,
-                            comment_ctx,
-                            self._format_edit_reply(
-                                agent_last or "(no output)",
-                                pushed=False,
-                                dry_run=self.config.dry_run,
-                                changed=False,
-                            ),
-                        )
-                except Exception:
-                    pass
-                return 0
-            if self.config.dry_run:
-                print("DRY_RUN: would commit and push changes.")
-                self._git_status_pretty()
-                try:
-                    if comment_ctx:
-                        self._reply_to_comment(
-                            repo,
-                            pr,
-                            comment_ctx,
-                            self._format_edit_reply(
-                                agent_last or "(no output)",
-                                pushed=False,
-                                dry_run=True,
-                                changed=True,
-                            ),
-                        )
-                except Exception:
-                    pass
-                return 0
-            self._git_setup_identity()
-            self._git_commit_all(f"Codex edit: {command_text.splitlines()[0][:72]}")
-            if head_branch:
-                self._git_push_head_to_branch(head_branch)
-            else:
-                # Fallback: push current branch
-                subprocess.run(["git", "push"], check=True)
-            print("Pushed edits successfully.")
-            try:
-                if comment_ctx:
-                    self._reply_to_comment(
-                        repo,
-                        pr,
-                        comment_ctx,
-                        self._format_edit_reply(
-                            agent_last or "(no output)", pushed=True, dry_run=False, changed=True
-                        ),
-                    )
-            except Exception:
-                pass
-            return 0
-        except subprocess.CalledProcessError as e:
-            print(f"Git operation failed: {e}", file=sys.stderr)
-            try:
-                if comment_ctx:
-                    self._reply_to_comment(repo, pr, comment_ctx, f"Git operation failed: {e}")
-            except Exception:
-                pass
-            return 2
-
-    def _format_edit_reply(
-        self, agent_output: str, *, pushed: bool, dry_run: bool, changed: bool
-    ) -> str:
-        status = (
-            "dry-run (no push)"
-            if dry_run
-            else ("pushed changes" if pushed else ("no changes" if not changed else "not pushed"))
-        )
-        header = f"Codex edit result ({status}):"
-        body = (agent_output or "").strip()
-        if len(body) > 3500:
-            body = body[:3500] + "\n\n… (truncated)"
-        return f"{header}\n\n{body}"
-
-    def _reply_to_comment(self, repo, pr, comment_ctx: dict, text: str) -> None:
-        event = (comment_ctx.get("event_name") or "").lower()
-        comment_id = int(comment_ctx.get("id") or 0)
-        if not comment_id:
-            pr.as_issue().create_comment(text)
-            return
-        try:
-            if event == "pull_request_review_comment":
-                url = f"{pr.url}/comments/{comment_id}/replies"
-                pr._requester.requestJsonAndCheck("POST", url, input={"body": text})
-            elif event == "issue_comment":
-                pr.as_issue().create_comment(text)
-            else:
-                pr.as_issue().create_comment(text)
-        except Exception as e:
-            self._debug(1, f"Failed replying to comment {comment_id}: {e}")
-
-    def _git_has_changes(self) -> bool:
-        res = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
-        return bool(res.stdout.strip())
-
-    def _git_status_pretty(self) -> None:
-        subprocess.run(["git", "status", "--short"], check=False)
-
-    def _git_setup_identity(self) -> None:
-        subprocess.run(
-            ["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"],
-            check=True,
-        )
-        subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
-
-    def _git_commit_all(self, message: str) -> None:
-        subprocess.run(["git", "add", "-A"], check=True)
-        subprocess.run(["git", "commit", "-m", message], check=True)
-
-    def _git_push_head_to_branch(self, branch: str) -> None:
-        # Push current HEAD to the target branch name on origin (works in detached HEAD)
-        subprocess.run(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], check=True)
-
-    def _write_context_artifacts(self, pr, changed_files: list) -> None:
-        """Create a `.codex-context` directory with diffs and PR context (including comments)."""
-        repo_root = self.config.repo_root or Path(".").resolve()
-        base_dir_name = self.config.context_dir_name or ".codex-context"
-        base_dir = (repo_root / base_dir_name).resolve()
-
-        diffs_dir = base_dir / "diffs"
-        annotated_dir = base_dir / "diffs_annotated"
-        diffs_dir.mkdir(parents=True, exist_ok=True)
-        annotated_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write combined diffs file and per-file patches
-        combined_lines: list[str] = []
-        for file in changed_files:
-            filename = file.filename
-            patch = getattr(file, "patch", None)
-            status = getattr(file, "status", "modified")
-            if not filename or not patch:
-                continue
-
-            combined_lines.append(f"File: {filename}\nStatus: {status}\n---\n{patch}\n")
-
-            # Create subdirs mirroring the file path and write .patch
-            file_path = Path(filename)
-            target_dir = diffs_dir / file_path.parent
-            target_dir.mkdir(parents=True, exist_ok=True)
-            (target_dir / f"{file_path.name}.patch").write_text(patch, encoding="utf-8")
-
-            # Also write annotated diff with explicit BASE/HEAD numbers
-            a_target_dir = annotated_dir / file_path.parent
-            a_target_dir.mkdir(parents=True, exist_ok=True)
-            annotated = annotate_patch_with_line_numbers(patch)
-            (a_target_dir / f"{file_path.name}.annotated.patch").write_text(
-                annotated, encoding="utf-8"
-            )
-
-        (base_dir / "combined_diffs.txt").write_text(
-            "\n" + ("\n" + ("-" * 80) + "\n").join(combined_lines), encoding="utf-8"
-        )
-
-        # Write PR metadata and comments into pr.md
-        parts: list[str] = []
-        parts.append(f"PR #{pr.number}: {pr.title or ''}")
-        parts.append("")
-        parts.append(f"URL: {pr.html_url}")
-        parts.append(f"Author: {pr.user.login if pr.user else ''}")
-        parts.append(f"State: {pr.state}")
-        parts.append("")
-        body = pr.body or ""
-        if body:
-            parts.append("PR Description:\n")
-            parts.append(body)
-            parts.append("")
-
-        # Issue comments (a.k.a. conversation comments)
-        try:
-            issue_comments = list(pr.get_issue_comments())
-        except Exception:
-            issue_comments = []
-        if issue_comments:
-            parts.append("Issue Comments:")
-            for c in issue_comments:
-                if isinstance(c, IssueComment):
-                    author = c.user.login if c.user else ""
-                    created = c.created_at
-                    parts.append(f"- [{created}] @{author}:\n{c.body or ''}\n")
-
-        # Review comments (inline on diffs)
-        try:
-            review_comments = list(pr.get_review_comments())
-        except Exception:
-            review_comments = []
-        if review_comments:
-            parts.append("Review Comments:")
-            for rc in review_comments:
-                if isinstance(rc, PullRequestComment):
-                    author = rc.user.login if rc.user else ""
-                    created = rc.created_at
-                    path = rc.path or ""
-                    line = rc.line or rc.original_line
-                    parts.append(f"- [{created}] @{author} on {path}:{line}\n{rc.body or ''}\n")
-
-        (base_dir / "pr.md").write_text("\n".join(parts) + "\n", encoding="utf-8")
 
     def _post_results(
         self,
@@ -761,7 +316,7 @@ class ReviewProcessor:
             + "\n\nOUTPUT: JSON with only the 'keep' array."
         )
 
-        raw = self._run_codex(
+        raw = self.codex_client.execute(
             prompt,
             model_name=self.config.fast_model_name,
             reasoning_effort=self.config.fast_reasoning_effort,
