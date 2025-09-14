@@ -42,18 +42,21 @@ cli/
 ### 4. **Configuration Management**
 - Environment variable support with validation
 - Command-line argument overrides
-- Flexible guidelines loading strategies
+- Explicit mode selection (review vs act)
 
 ## Usage
 
 ### As a CLI Tool
 
 ```bash
-# Review a specific PR
+# Review a specific PR (default mode)
 python -m cli.main --repo owner/repo --pr 123
 
-# Use custom guidelines
-python -m cli.main --repo owner/repo --pr 123 --guidelines-file custom.md
+# Explicit review mode
+python -m cli.main --repo owner/repo --pr 123 --mode review
+
+# Act mode with custom instructions
+python -m cli.main --repo owner/repo --pr 123 --mode act --act-instructions "Run tests after changes"
 
 # Dry run mode
 python -m cli.main --repo owner/repo --pr 123 --dry-run
@@ -81,23 +84,20 @@ Comment-triggered edits
 |----------|-------------|---------|
 | `GITHUB_TOKEN` | GitHub API token | *Required* |
 | `OPENAI_API_KEY` | OpenAI API key | *Required for OpenAI* |
+| `CODEX_MODE` | Operation mode (review/act) | `review` |
 | `CODEX_MODEL` | Model name | `gpt-5` |
 | `CODEX_PROVIDER` | Model provider | `openai` |
 | `CODEX_REASONING_EFFORT` | Reasoning effort level | `medium` |
 | `CODEX_FAST_MODEL` | Fast model for dedup on repeated runs | `gpt-5-mini` |
 | `CODEX_FAST_REASONING_EFFORT` | Reasoning effort for fast model | `low` |
-| `REVIEW_PROMPT_STRATEGY` | Guidelines strategy | `auto` |
-| `REVIEW_PROMPT_PATH` | Guidelines file path | `prompts/code-review.md` |
-| `REVIEW_PROMPT_INLINE` | Inline guidelines text | `` |
+| `CODEX_ACT_INSTRUCTIONS` | Additional instructions for act mode | `` |
 | `DEBUG_CODEREVIEW` | Debug level (0-2) | `0` |
 | `DRY_RUN` | Skip posting (1 for dry run) | `0` |
 
-## Guidelines Strategies
+## Operation Modes
 
-- **`auto`**: Try inline → file → builtin (default)
-- **`inline`**: Use `REVIEW_PROMPT_INLINE` environment variable
-- **`file`**: Use file specified by `REVIEW_PROMPT_PATH`
-- **`builtin`**: Use built-in guidelines from `prompts/review.md`
+- **`review`** (default): Analyzes PR diffs using built-in guidelines from `prompts/review.md`
+- **`act`**: Responds to @codex commands in PR comments to make autonomous code edits with optional custom instructions
 
 ## Testing
 

@@ -61,6 +61,66 @@ This action supports two distinct modes:
 
 Set the mode via the `mode` input parameter.
 
+## Review Mode Example
+
+For traditional code review on PR events:
+
+```yaml
+name: Codex Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Codex autonomous review
+        uses: gersmann/codex-review-action@latest
+        with:
+          mode: review  # explicit (though this is the default)
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          model: gpt-5
+          reasoning_effort: medium
+```
+
+## Act Mode Example
+
+For autonomous code editing via @codex commands:
+
+```yaml
+name: Codex Review & Edits
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+permissions:
+  contents: write         # allow commits/pushes
+  pull-requests: write    # allow posting comments/reviews
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Codex autonomous review & edits
+        uses: gersmann/codex-review-action@latest
+        with:
+          mode: act
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          model: gpt-5
+          act_instructions: "Always run tests after making changes"
+```
+
 Requirements
 
 - An OpenAI API key (set as repository secret OPENAI_API_KEY and pass via input openai_api_key).
