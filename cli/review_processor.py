@@ -9,7 +9,7 @@ from typing import Any
 from github import Github
 from github.GithubException import GithubException
 
-from codex.config import ApprovalPolicy, CodexConfig, ReasoningEffort, ToolsConfig
+from codex.config import ApprovalPolicy, CodexConfig, ReasoningEffort
 from codex.native import start_exec_stream as native_start_exec_stream
 
 from .config import ReviewConfig
@@ -48,7 +48,6 @@ class ReviewProcessor:
             model=self.config.model_name,
             model_reasoning_effort=effort_enum,
             model_provider=self.config.model_provider,
-            tools=ToolsConfig(web_search=True),
             base_instructions=(
                 "You are a precise code review assistant.\n"
                 "You must respond with a single JSON object, matching the provided schema exactly.\n"
@@ -173,6 +172,13 @@ class ReviewProcessor:
                 f" - {file.filename} status={getattr(file, 'status', 'modified')} patch_len={patch_len}",
             )
 
+        # Prepare local context artifacts (diffs + PR contents with comments)
+        try:
+            self._write_context_artifacts(pr, changed_files)
+        except Exception as e:
+            # Non-fatal: continue review even if context writing fails
+            self._debug(1, f"Failed to write context artifacts: {e}")
+
         # Load guidelines and compose prompt
         guidelines = self.prompt_builder.load_guidelines()
         prompt = self.prompt_builder.compose_prompt(guidelines, changed_files, pr_data)
@@ -195,6 +201,76 @@ class ReviewProcessor:
         self._post_results(result, changed_files, repo, pr, head_sha)
 
         return result
+
+    def _write_context_artifacts(self, pr, changed_files: list) -> None:
+        """Create a `.codex-context` directory with diffs and PR context (including comments)."""
+        repo_root = self.config.repo_root or Path(".").resolve()
+        base_dir_name = getattr(self.config, "context_dir_name", ".codex-context") or ".codex-context"
+        base_dir = (repo_root / base_dir_name).resolve()
+
+        diffs_dir = base_dir / "diffs"
+        diffs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write combined diffs file and per-file patches
+        combined_lines: list[str] = []
+        for file in changed_files:
+            filename = getattr(file, "filename", None)
+            patch = getattr(file, "patch", None)
+            status = getattr(file, "status", "modified")
+            if not filename or not patch:
+                continue
+
+            combined_lines.append(f"File: {filename}\nStatus: {status}\n---\n{patch}\n")
+
+            # Create subdirs mirroring the file path and write .patch
+            file_path = Path(filename)
+            target_dir = diffs_dir / file_path.parent
+            target_dir.mkdir(parents=True, exist_ok=True)
+            (target_dir / f"{file_path.name}.patch").write_text(patch, encoding="utf-8")
+
+        (base_dir / "combined_diffs.txt").write_text("\n" + ("\n" + ("-" * 80) + "\n").join(combined_lines), encoding="utf-8")
+
+        # Write PR metadata and comments into pr.md
+        parts: list[str] = []
+        parts.append(f"PR #{getattr(pr, 'number', '')}: {getattr(pr, 'title', '')}")
+        parts.append("")
+        parts.append(f"URL: {getattr(pr, 'html_url', '')}")
+        parts.append(f"Author: {getattr(getattr(pr, 'user', None), 'login', '')}")
+        parts.append(f"State: {getattr(pr, 'state', '')}")
+        parts.append("")
+        body = getattr(pr, "body", "") or ""
+        if body:
+            parts.append("PR Description:\n")
+            parts.append(body)
+            parts.append("")
+
+        # Issue comments (a.k.a. conversation comments)
+        try:
+            issue_comments = list(pr.get_issue_comments())
+        except Exception:
+            issue_comments = []
+        if issue_comments:
+            parts.append("Issue Comments:")
+            for c in issue_comments:
+                author = getattr(getattr(c, "user", None), "login", "")
+                created = getattr(c, "created_at", "")
+                parts.append(f"- [{created}] @{author}:\n{getattr(c, 'body', '')}\n")
+
+        # Review comments (inline on diffs)
+        try:
+            review_comments = list(pr.get_review_comments())
+        except Exception:
+            review_comments = []
+        if review_comments:
+            parts.append("Review Comments:")
+            for rc in review_comments:
+                author = getattr(getattr(rc, "user", None), "login", "")
+                created = getattr(rc, "created_at", "")
+                path = getattr(rc, "path", "")
+                line = getattr(rc, "line", None) or getattr(rc, "original_line", None)
+                parts.append(f"- [{created}] @{author} on {path}:{line}\n{getattr(rc, 'body', '')}\n")
+
+        (base_dir / "pr.md").write_text("\n".join(parts) + "\n", encoding="utf-8")
 
     def _post_results(
         self,
@@ -223,6 +299,17 @@ class ReviewProcessor:
             summary_lines.append(f"Confidence: {overall_conf}")
         summary = "\n".join(summary_lines)
 
+        # If this PR already has a Codex review, deduplicate new findings using the fast model
+        try:
+            if self._has_prior_codex_review(pr):
+                existing = self._collect_existing_comment_texts(pr)
+                filtered = self._deduplicate_findings(findings, existing)
+                if isinstance(filtered, list):
+                    self._debug(1, f"Deduplication reduced findings {len(findings)} -> {len(filtered)}")
+                    findings = filtered
+        except Exception as e:
+            self._debug(1, f"Deduplication step failed: {e}")
+
         # Post review summary
         try:
             if self.config.dry_run:
@@ -246,6 +333,87 @@ class ReviewProcessor:
 
         # Post individual findings
         self._post_findings(findings, position_by_path, repo, pr, head_sha)
+
+    def _has_prior_codex_review(self, pr) -> bool:
+        try:
+            for rev in pr.get_reviews():
+                body = getattr(rev, "body", "") or ""
+                if "Codex Autonomous Review:" in body:
+                    return True
+        except Exception:
+            pass
+        # Also check issue comments, in case summary was posted there in previous versions
+        try:
+            for c in pr.get_issue_comments():
+                if "Codex Autonomous Review:" in (getattr(c, "body", "") or ""):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _collect_existing_comment_texts(self, pr) -> list[str]:
+        texts: list[str] = []
+        try:
+            for c in pr.get_issue_comments():
+                t = (getattr(c, "body", "") or "").strip()
+                if t:
+                    texts.append(t)
+        except Exception:
+            pass
+        try:
+            for rc in pr.get_review_comments():
+                t = (getattr(rc, "body", "") or "").strip()
+                if t:
+                    texts.append(t)
+        except Exception:
+            pass
+        return texts
+
+    def _deduplicate_findings(self, findings: list[dict[str, Any]], existing_comments: list[str]) -> list[dict[str, Any]]:
+        """Use the fast model to filter out findings already covered by existing comments."""
+        # Build compact payload
+        compact_findings: list[dict[str, Any]] = []
+        for idx, f in enumerate(findings):
+            loc = (f.get("code_location") or {}) if isinstance(f, dict) else {}
+            rng = (loc.get("line_range") or {}) if isinstance(loc, dict) else {}
+            compact_findings.append(
+                {
+                    "index": idx,
+                    "title": str(f.get("title", "")),
+                    "body": str(f.get("body", "")),
+                    "path": str(loc.get("absolute_file_path", "")),
+                    "start": int(rng.get("start", 0) or 0),
+                }
+            )
+
+        instructions = (
+            "You are deduplicating review comments.\n"
+            "Given `new_findings` and `existing_comments`, return JSON {\"keep\": [indices]} where indices refer to new_findings[index].\n"
+            "Consider a new finding a duplicate if an existing comment already conveys the same issue for the same file and nearby lines,\n"
+            "or if it is semantically redundant. Prefer recall (keep) when unsure.\n"
+        )
+
+        payload = {
+            "new_findings": compact_findings,
+            "existing_comments": existing_comments[:200],  # cap to avoid huge prompts
+        }
+
+        prompt = instructions + "\n\nINPUT:\n" + json.dumps(payload, ensure_ascii=False) + "\n\nOUTPUT: JSON with only the 'keep' array."
+
+        raw = self._run_codex(
+            prompt,
+            model_name=self.config.fast_model_name,
+            reasoning_effort=self.config.fast_reasoning_effort,
+        )
+        try:
+            data = json.loads(raw)
+            keep = data.get("keep") if isinstance(data, dict) else None
+            if not isinstance(keep, list):
+                return findings
+            keep_set = {int(i) for i in keep if isinstance(i, int) or (isinstance(i, str) and str(i).isdigit())}
+            return [f for i, f in enumerate(findings) if i in keep_set]
+        except Exception:
+            return findings
 
     def _post_findings(
         self,

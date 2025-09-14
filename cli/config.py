@@ -21,6 +21,9 @@ class ReviewConfig:
     model_provider: str = "openai"
     model_name: str = "gpt-4.1-mini"
     reasoning_effort: str = "medium"
+    # Fast model for deduplication on repeated runs
+    fast_model_name: str = "gpt-5-mini"
+    fast_reasoning_effort: str = "low"
 
     # Review configuration
     guidelines_strategy: str = "auto"
@@ -34,6 +37,7 @@ class ReviewConfig:
 
     # Repository paths
     repo_root: Path | None = None
+    context_dir_name: str = ".codex-context"
 
     @classmethod
     def from_environment(cls) -> ReviewConfig:
@@ -59,6 +63,8 @@ class ReviewConfig:
         model_provider = os.environ.get("CODEX_PROVIDER", "openai").strip().lower()
         model_name = os.environ.get("CODEX_MODEL", "gpt-4.1-mini").strip()
         reasoning_effort = os.environ.get("CODEX_REASONING_EFFORT", "medium").strip()
+        fast_model_name = os.environ.get("FAST_MODEL", "gpt-5-mini").strip()
+        fast_reasoning_effort = os.environ.get("FAST_REASONING_EFFORT", "low").strip()
 
         # Validate model authentication
         if model_provider == "openai":
@@ -87,6 +93,8 @@ class ReviewConfig:
             model_provider=model_provider,
             model_name=model_name,
             reasoning_effort=reasoning_effort,
+            fast_model_name=fast_model_name,
+            fast_reasoning_effort=fast_reasoning_effort,
             guidelines_strategy=guidelines_strategy,
             guidelines_path=guidelines_path,
             guidelines_inline=guidelines_inline,

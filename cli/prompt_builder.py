@@ -70,6 +70,7 @@ class PromptBuilder:
     ) -> str:
         """Compose the complete review prompt."""
         repo_root = self.config.repo_root or Path(".").resolve()
+        context_dir = repo_root / self.config.context_dir_name
 
         pr_title = pr_data.get("title") or ""
         head_label = pr_data.get("head", {}).get("label", "")
@@ -88,6 +89,7 @@ class PromptBuilder:
             f"From: {head_label} ({head_sha}) -> To: {base_label} ({base_sha})\n\n"
             "Important paths:\n"
             f"- Repo root (absolute): {repo_root}\n"
+            f"- Local context dir: {context_dir} (contains combined_diffs.txt, pr.md, and per-file patches in diffs/)\n"
             "When returning code_location.absolute_file_path, use the absolute path under this root.\n"
             "Line ranges must overlap with the provided diff hunks.\n"
         )

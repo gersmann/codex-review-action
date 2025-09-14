@@ -92,6 +92,20 @@ Environment Variables:
         default="medium",
         help="Reasoning effort level (default: medium)",
     )
+    # Fast model for deduplication
+    parser.add_argument(
+        "--fast-model",
+        dest="fast_model_name",
+        default="gpt-5-mini",
+        help="Fast model for deduplication on repeated runs (default: gpt-5-mini)",
+    )
+    parser.add_argument(
+        "--fast-reasoning-effort",
+        dest="fast_reasoning_effort",
+        choices=["low", "medium", "high"],
+        default="low",
+        help="Reasoning effort for fast model (default: low)",
+    )
 
     # Guidelines configuration
     parser.add_argument(

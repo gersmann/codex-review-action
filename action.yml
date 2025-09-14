@@ -25,10 +25,18 @@ inputs:
     description: "If '1', print payloads but do not post comments"
     required: false
     default: "0"
-  stream_agent_messages:
-    description: "If '1', stream model output to logs"
+    stream_agent_messages:
+      description: "If '1', stream model output to logs"
+      required: false
+      default: "1"
+  fast_model:
+    description: "Fast model for deduplication on repeated runs"
     required: false
-    default: "1"
+    default: "gpt-5-mini"
+  fast_reasoning_effort:
+    description: "Reasoning effort for fast model"
+    required: false
+    default: "low"
   codex_python_version:
     description: "Version spec for codex-python on PyPI (e.g., '>=0.2.3')"
     required: false
@@ -73,6 +81,8 @@ runs:
         # Config
         CODEX_MODEL: ${{ inputs.model }}
         CODEX_REASONING_EFFORT: ${{ inputs.reasoning_effort }}
+        FAST_MODEL: ${{ inputs.fast_model }}
+        FAST_REASONING_EFFORT: ${{ inputs.fast_reasoning_effort }}
         DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
         DRY_RUN: ${{ inputs.dry_run }}
         STREAM_AGENT_MESSAGES: ${{ inputs.stream_agent_messages }}
