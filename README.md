@@ -52,13 +52,14 @@ Quick start
             reasoning_effort: medium
             debug_level: 1
 
-Prompt options
+Operation Modes
 
-- By default (prompt_strategy: auto), the action looks for an inline prompt, then a file, then falls back to a built-in prompt bundled with the action.
-- Override via inputs:
-  - prompt_strategy: auto | builtin | file | inline (default auto)
-  - prompt_path: path to a prompt file in the repo (default prompts/code-review.md)
-  - prompt_inline: supply the full prompt text directly
+This action supports two distinct modes:
+
+- **review** (default): Analyzes PR diffs and posts review comments using built-in review guidelines
+- **act**: Responds to @codex commands in PR comments to make autonomous code edits
+
+Set the mode via the `mode` input parameter.
 
 Requirements
 
@@ -67,14 +68,18 @@ Requirements
 
 Inputs
 
-- openai_api_key (string, required): OpenAI API key.
-- model (string, default gpt-5): Model to use (e.g., gpt-5, gpt-4o-mini).
-- reasoning_effort (string, default medium): minimal | low | medium | high.
-- debug_level (string, default 0): 0 (off), 1 (basic), 2 (trace HTTP + anchoring).
-- dry_run (string, default 0): if 1, prints payloads but does not post comments.
-- stream_agent_messages (string, default 1): if 1, streams agent output to logs.
-- codex_python_version (string, default empty): Version specifier passed to pip (e.g., ">=0.2.3").
-- extra_pip_args (string, default empty): Extra pip flags (e.g., --index-url …).
+- **mode** (string, default "review"): Operation mode - "review" for code review, "act" for autonomous editing
+- **openai_api_key** (string, required): OpenAI API key
+- **model** (string, default "gpt-5"): Model to use (e.g., gpt-5, gpt-4o-mini)
+- **reasoning_effort** (string, default "medium"): minimal | low | medium | high
+- **debug_level** (string, default "0"): 0 (off), 1 (basic), 2 (trace HTTP + anchoring)
+- **dry_run** (string, default "0"): if "1", prints payloads but does not post comments
+- **stream_agent_messages** (string, default "1"): if "1", streams agent output to logs
+- **fast_model** (string, default "gpt-5-mini"): Fast model for deduplication on repeated runs (review mode only)
+- **fast_reasoning_effort** (string, default "low"): Reasoning effort for fast model (review mode only)
+- **act_instructions** (string, default ""): Additional instructions for act mode (autonomous editing)
+- **codex_python_version** (string, default ""): Version specifier passed to pip (e.g., ">=0.2.3")
+- **extra_pip_args** (string, default ""): Extra pip flags (e.g., --index-url …)
 
 What it posts
 
@@ -84,9 +89,9 @@ What it posts
 
 Troubleshooting
 
-- 422 Unprocessable Entity on comments: The action uses diff positions (not line/side). If a line isn’t in the diff, it falls back to a file-level comment.
-- Model errors (builder error): Ensure model input is valid for your key; try model: gpt-5.
-- No prompt file: Ensure prompts/code-review.md exists in the target repository.
+- **422 Unprocessable Entity on comments**: The action uses diff positions (not line/side). If a line isn't in the diff, it falls back to a file-level comment.
+- **Model errors (builder error)**: Ensure model input is valid for your key; try model: gpt-5.
+- **Review mode**: Uses built-in review guidelines from prompts/review.md - no additional setup needed.
 
 Notes
 
