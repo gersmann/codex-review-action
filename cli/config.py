@@ -74,18 +74,18 @@ class ReviewConfig:
         # Act mode configuration
         act_instructions = os.environ.get("CODEX_ACT_INSTRUCTIONS", "").strip()
 
-
         # Validate model authentication
         if model_provider == "openai":
             if not os.environ.get("OPENAI_API_KEY"):
                 raise ConfigurationError("Missing OPENAI_API_KEY for model provider 'openai'")
 
-
         # Output configuration
         debug_level = _parse_debug_level(os.environ.get("DEBUG_CODEREVIEW", "0"))
         stream_output = os.environ.get("STREAM_AGENT_MESSAGES", "1") != "0"
         dry_run = os.environ.get("DRY_RUN") == "1"
-        include_annotated_in_prompt = (os.environ.get("REVIEW_INCLUDE_ANNOTATED") or "").strip().lower() in ("1", "true", "yes")
+        include_annotated_in_prompt = (
+            os.environ.get("REVIEW_INCLUDE_ANNOTATED") or ""
+        ).strip().lower() in ("1", "true", "yes")
 
         # Repository paths
         repo_root = None
@@ -140,7 +140,6 @@ class ReviewConfig:
 
         if self.mode not in ("review", "act"):
             raise ConfigurationError(f"Invalid mode: {self.mode}. Must be 'review' or 'act'")
-
 
         if self.debug_level < 0:
             raise ConfigurationError("Debug level must be non-negative")

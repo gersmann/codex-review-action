@@ -108,7 +108,9 @@ class PromptBuilder:
             "- When you quote text in the body, align code_location.start to the line that contains that quote.\n"
         )
 
-        include_annotated = self.config.include_annotated_in_prompt or (self.config.debug_level >= 2)
+        include_annotated = self.config.include_annotated_in_prompt or (
+            self.config.debug_level >= 2
+        )
         include_annotated = include_annotated and (total_patch_lines <= 4000)
 
         prompt = (
@@ -120,7 +122,11 @@ class PromptBuilder:
             "Changed files and patches:\n"
             f"{diff_blob}\n\n"
             + (
-                ("Annotated patches with explicit HEAD line numbers:\n" + ("\n" + ("\n" + ("-" * 80) + "\n").join(annotated_diffs)) + "\n\n")
+                (
+                    "Annotated patches with explicit HEAD line numbers:\n"
+                    + ("\n" + ("\n" + ("-" * 80) + "\n").join(annotated_diffs))
+                    + "\n\n"
+                )
                 if (include_annotated and annotated_diffs)
                 else ""
             )

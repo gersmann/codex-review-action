@@ -1,26 +1,33 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
-import re
 from typing import Any
 
 from github import Github
 from github.GithubException import GithubException
+from github.IssueComment import IssueComment
 from github.PullRequest import PullRequest
 from github.PullRequestComment import PullRequestComment
-from github.IssueComment import IssueComment
 
-from codex.config import ApprovalPolicy, CodexConfig, ReasoningEffort
+from codex.config import (
+    ApprovalPolicy,
+    CodexConfig,
+    ReasoningEffort,
+    SandboxMode,
+    SandboxWorkspaceWrite,
+)
 from codex.native import start_exec_stream as native_start_exec_stream
 
+from .anchor_engine import build_maps as build_anchor_maps
+from .anchor_engine import resolve_range
 from .config import ReviewConfig
 from .exceptions import CodexExecutionError
 from .patch_parser import annotate_patch_with_line_numbers
-from .anchor_engine import build_maps as build_anchor_maps, resolve_range
 from .prompt_builder import PromptBuilder
 
 
@@ -65,12 +72,6 @@ class ReviewProcessor:
             model=model,
             model_reasoning_effort=effort_enum,
             model_provider=self.config.model_provider,
-            # base_instructions=(
-            #     "You are a precise code review assistant.\n"
-            #     "You must respond with a single JSON object, matching the provided schema exactly.\n"
-            #     "Do not include any Markdown fences or extra commentary.\n"
-            #     f"Target reasoning effort: {effort_str}."
-            # ),
         ).to_dict()
 
         last_msg: str | None = None
@@ -88,7 +89,9 @@ class ReviewProcessor:
                 msg_type = msg.get("type") if isinstance(msg, dict) else None
 
                 if self.config.debug_level >= 1:
-                    if msg_type in ("agent_reasoning_delta", "agent_message_delta") and isinstance(msg, dict):
+                    if msg_type in ("agent_reasoning_delta", "agent_message_delta") and isinstance(
+                        msg, dict
+                    ):
                         d = msg.get("delta")
                         if isinstance(d, str):
                             # Emit only the raw text, no wrappers or newlines
@@ -252,7 +255,9 @@ class ReviewProcessor:
         s2 = re.sub(r"^```.*?$|```$", "", s, flags=re.MULTILINE).strip()
         return json.loads(s2)
 
-    def process_edit_command(self, command_text: str, pr_number: int, comment_ctx: dict | None = None) -> int:
+    def process_edit_command(
+        self, command_text: str, pr_number: int, comment_ctx: dict | None = None
+    ) -> int:
         """Run a coding-agent edit command against the PR's branch.
 
         - Enables apply_patch tool and plan tool
@@ -287,9 +292,24 @@ class ReviewProcessor:
             "When finished, ensure the repo builds/tests if applicable."
         )
 
-        # Run Codex agent with tools enabled
+        # Run Codex agent with tools enabled and a writable workspace sandbox (act mode)
+        # Enable file writes within the repo root and network access for dependency ops.
+        # Fall back gracefully if sandbox types are not available in this codex-python version.
+        approval = ApprovalPolicy.NEVER
+        sandbox_mode = SandboxMode.WORKSPACE_WRITE
+        sandbox_ws = (
+            SandboxWorkspaceWrite(
+                writable_roots=[str(repo_root)],
+                network_access=True,
+                exclude_tmpdir_env_var=False,
+                exclude_slash_tmp=False,
+            )
+            if SandboxWorkspaceWrite and sandbox_mode is not None
+            else None
+        )
+
         overrides = CodexConfig(
-            approval_policy=ApprovalPolicy.NEVER,
+            approval_policy=approval,
             include_plan_tool=True,
             include_apply_patch_tool=True,
             include_view_image_tool=False,
@@ -297,6 +317,8 @@ class ReviewProcessor:
             model=self.config.model_name,
             model_reasoning_effort=ReasoningEffort(self.config.reasoning_effort.lower()),
             model_provider=self.config.model_provider,
+            sandbox_mode=sandbox_mode,
+            sandbox_workspace_write=sandbox_ws,
         ).to_dict()
 
         agent_last: str | None = None
@@ -311,7 +333,9 @@ class ReviewProcessor:
                 msg = item.get("msg") if isinstance(item, dict) else None
                 msg_type = msg.get("type") if isinstance(msg, dict) else None
                 if self.config.debug_level >= 1:
-                    if msg_type in ("agent_reasoning_delta", "agent_message_delta") and isinstance(msg, dict):
+                    if msg_type in ("agent_reasoning_delta", "agent_message_delta") and isinstance(
+                        msg, dict
+                    ):
                         d = msg.get("delta")
                         if isinstance(d, str):
                             d_one_line = d.replace("\n", "").replace("\r", "")
@@ -354,7 +378,12 @@ class ReviewProcessor:
                             repo,
                             pr,
                             comment_ctx,
-                            self._format_edit_reply(agent_last or "(no output)", pushed=False, dry_run=self.config.dry_run, changed=False),
+                            self._format_edit_reply(
+                                agent_last or "(no output)",
+                                pushed=False,
+                                dry_run=self.config.dry_run,
+                                changed=False,
+                            ),
                         )
                 except Exception:
                     pass
@@ -368,7 +397,12 @@ class ReviewProcessor:
                             repo,
                             pr,
                             comment_ctx,
-                            self._format_edit_reply(agent_last or "(no output)", pushed=False, dry_run=True, changed=True),
+                            self._format_edit_reply(
+                                agent_last or "(no output)",
+                                pushed=False,
+                                dry_run=True,
+                                changed=True,
+                            ),
                         )
                 except Exception:
                     pass
@@ -387,7 +421,9 @@ class ReviewProcessor:
                         repo,
                         pr,
                         comment_ctx,
-                        self._format_edit_reply(agent_last or "(no output)", pushed=True, dry_run=False, changed=True),
+                        self._format_edit_reply(
+                            agent_last or "(no output)", pushed=True, dry_run=False, changed=True
+                        ),
                     )
             except Exception:
                 pass
@@ -401,9 +437,13 @@ class ReviewProcessor:
                 pass
             return 2
 
-    def _format_edit_reply(self, agent_output: str, *, pushed: bool, dry_run: bool, changed: bool) -> str:
+    def _format_edit_reply(
+        self, agent_output: str, *, pushed: bool, dry_run: bool, changed: bool
+    ) -> str:
         status = (
-            "dry-run (no push)" if dry_run else ("pushed changes" if pushed else ("no changes" if not changed else "not pushed"))
+            "dry-run (no push)"
+            if dry_run
+            else ("pushed changes" if pushed else ("no changes" if not changed else "not pushed"))
         )
         header = f"Codex edit result ({status}):"
         body = (agent_output or "").strip()
@@ -482,7 +522,9 @@ class ReviewProcessor:
             a_target_dir = annotated_dir / file_path.parent
             a_target_dir.mkdir(parents=True, exist_ok=True)
             annotated = annotate_patch_with_line_numbers(patch)
-            (a_target_dir / f"{file_path.name}.annotated.patch").write_text(annotated, encoding="utf-8")
+            (a_target_dir / f"{file_path.name}.annotated.patch").write_text(
+                annotated, encoding="utf-8"
+            )
 
         (base_dir / "combined_diffs.txt").write_text(
             "\n" + ("\n" + ("-" * 80) + "\n").join(combined_lines), encoding="utf-8"
@@ -575,7 +617,9 @@ class ReviewProcessor:
         # Replace previous summary with a fresh issue comment
         try:
             if self.config.dry_run:
-                self._debug(1, "DRY_RUN: would delete prior summary (if any) and create a fresh one")
+                self._debug(
+                    1, "DRY_RUN: would delete prior summary (if any) and create a fresh one"
+                )
             else:
                 self._delete_prior_summary(pr)
                 pr.as_issue().create_comment(summary)
@@ -589,12 +633,17 @@ class ReviewProcessor:
         try:
             repo_root = self.config.repo_root or Path(".").resolve()
             base_dir = (repo_root / (self.config.context_dir_name or ".codex-context")).resolve()
-            out = {k: {
-                "valid_head_lines": sorted(list(v.valid_head_lines)),
-                "added_head_lines": sorted(list(v.added_head_lines)),
-                "positions_by_head_line": {str(kk): vv for kk, vv in v.positions_by_head_line.items()},
-                "hunks": v.hunks,
-            } for k, v in file_maps.items()}
+            out = {
+                k: {
+                    "valid_head_lines": sorted(list(v.valid_head_lines)),
+                    "added_head_lines": sorted(list(v.added_head_lines)),
+                    "positions_by_head_line": {
+                        str(kk): vv for kk, vv in v.positions_by_head_line.items()
+                    },
+                    "hunks": v.hunks,
+                }
+                for k, v in file_maps.items()
+            }
             (base_dir / "anchor_maps.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
         except Exception as e:
             self._debug(1, f"Failed writing anchor_maps.json: {e}")
@@ -612,9 +661,13 @@ class ReviewProcessor:
                 if marker in body:
                     try:
                         c.delete()
-                        self._debug(1, f"Deleted prior summary issue comment id={getattr(c,'id',None)}")
+                        self._debug(
+                            1, f"Deleted prior summary issue comment id={getattr(c, 'id', None)}"
+                        )
                     except Exception as e:
-                        self._debug(1, f"Failed to delete issue comment id={getattr(c,'id',None)}: {e}")
+                        self._debug(
+                            1, f"Failed to delete issue comment id={getattr(c, 'id', None)}: {e}"
+                        )
         except Exception as e:
             self._debug(1, f"Listing issue comments failed: {e}")
 
@@ -772,18 +825,25 @@ class ReviewProcessor:
             anchor = resolve_range(rel_path, start_line, end_line, has_suggestion, fmap)
             if not anchor:
                 if self.config.dry_run:
-                    self._debug(1, f"DRY_RUN: would skip (no anchor) for {rel_path}:{start_line}-{end_line}")
+                    self._debug(
+                        1, f"DRY_RUN: would skip (no anchor) for {rel_path}:{start_line}-{end_line}"
+                    )
                 continue
 
             final_body = body
-            if has_suggestion and not (anchor.get("allow_suggestion") and anchor.get("kind") == "range"):
+            if has_suggestion and not (
+                anchor.get("allow_suggestion") and anchor.get("kind") == "range"
+            ):
                 final_body = body.replace("```suggestion", "```diff")
 
             comment_body = f"{title}\n\n{final_body}" if final_body else title
 
             if self.config.dry_run:
                 if anchor["kind"] == "range":
-                    self._debug(1, f"DRY_RUN: would post RANGE {rel_path}:{anchor['start_line']}-{anchor['end_line']}")
+                    self._debug(
+                        1,
+                        f"DRY_RUN: would post RANGE {rel_path}:{anchor['start_line']}-{anchor['end_line']}",
+                    )
                 else:
                     self._debug(1, f"DRY_RUN: would post SINGLE {rel_path}:{anchor['line']}")
                 continue

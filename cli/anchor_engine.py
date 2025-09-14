@@ -1,29 +1,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
 
 
 @dataclass
 class FileAnchorMaps:
-    valid_head_lines: Set[int]
-    added_head_lines: Set[int]
-    content_by_head_line: Dict[int, str]
-    positions_by_head_line: Dict[int, int]
-    hunks: List[Tuple[int, int]]  # inclusive head line ranges observed in this patch
+    valid_head_lines: set[int]
+    added_head_lines: set[int]
+    content_by_head_line: dict[int, str]
+    positions_by_head_line: dict[int, int]
+    hunks: list[tuple[int, int]]  # inclusive head line ranges observed in this patch
 
 
-def _parse_patch_maps(patch: str) -> Tuple[Set[int], Set[int], Dict[int, str], List[Tuple[int, int]]]:
+def _parse_patch_maps(
+    patch: str,
+) -> tuple[set[int], set[int], dict[int, str], list[tuple[int, int]]]:
     """Parse unified diff patch into maps needed for anchoring.
 
     Returns (valid_head_lines, added_head_lines, content_by_head_line, hunks)
     where valid_head_lines includes context (' ') and added ('+') lines.
     Hunks are inclusive ranges of head lines seen within each @@ block.
     """
-    valid: Set[int] = set()
-    added: Set[int] = set()
-    content: Dict[int, str] = {}
-    hunks: List[Tuple[int, int]] = []
+    valid: set[int] = set()
+    added: set[int] = set()
+    content: dict[int, str] = {}
+    hunks: list[tuple[int, int]] = []
 
     i_new = 0
     in_hunk = False
@@ -81,8 +82,8 @@ def _parse_patch_maps(patch: str) -> Tuple[Set[int], Set[int], Dict[int, str], L
     return valid, added, content, hunks
 
 
-def build_maps(changed_files: list) -> Dict[str, FileAnchorMaps]:
-    maps: Dict[str, FileAnchorMaps] = {}
+def build_maps(changed_files: list) -> dict[str, FileAnchorMaps]:
+    maps: dict[str, FileAnchorMaps] = {}
     for f in changed_files:
         patch = getattr(f, "patch", None)
         filename = getattr(f, "filename", None)
@@ -91,7 +92,7 @@ def build_maps(changed_files: list) -> Dict[str, FileAnchorMaps]:
         valid, added, content, hunks = _parse_patch_maps(patch)
         # positions_by_head_line can be empty; only used for optional diagnostics
         # Build simple position map by counting lines inside hunks
-        positions: Dict[int, int] = {}
+        positions: dict[int, int] = {}
         pos = 0
         i_new = 0
         in_hunk = False
@@ -136,17 +137,17 @@ def build_maps(changed_files: list) -> Dict[str, FileAnchorMaps]:
     return maps
 
 
-def _nearest_line(target: int, preferred: List[int]) -> Optional[int]:
+def _nearest_line(target: int, preferred: list[int]) -> int | None:
     if not preferred:
         return None
     return min(preferred, key=lambda x: (abs(x - target), x))
 
 
-def _nonblank(lines: Set[int], content: Dict[int, str]) -> List[int]:
-    return [l for l in lines if str(content.get(l, "")).strip() != ""]
+def _nonblank(lines: set[int], content: dict[int, str]) -> list[int]:
+    return [line_num for line_num in lines if str(content.get(line_num, "")).strip() != ""]
 
 
-def _same_hunk(line_a: int, line_b: int, hunks: List[Tuple[int, int]]) -> bool:
+def _same_hunk(line_a: int, line_b: int, hunks: list[tuple[int, int]]) -> bool:
     for lo, hi in hunks:
         if lo <= line_a <= hi and lo <= line_b <= hi:
             return True
@@ -160,7 +161,7 @@ def resolve_range(
     has_suggestion: bool,
     file_maps: FileAnchorMaps,
     max_suggestion_span: int = 5,
-) -> Optional[dict]:
+) -> dict | None:
     """Resolve the model-provided range to a deterministic anchor.
 
     Returns a dict with keys: kind ('single'|'range'), line, start_line, end_line, allow_suggestion (bool).
@@ -183,7 +184,9 @@ def resolve_range(
     valid_nb = _nonblank(valid, content)
 
     # Prefer added non-blank near requested_start; then any valid non-blank
-    start_final = _nearest_line(requested_start, added_nb) or _nearest_line(requested_start, valid_nb)
+    start_final = _nearest_line(requested_start, added_nb) or _nearest_line(
+        requested_start, valid_nb
+    )
     end_final = _nearest_line(requested_end, added_nb) or _nearest_line(requested_end, valid_nb)
 
     if not start_final and not end_final:
@@ -199,7 +202,7 @@ def resolve_range(
     # Decide if we can post a range suggestion
     contiguous = (
         _same_hunk(start_final, end_final, hunks)
-        and all(l in valid for l in range(start_final, end_final + 1))
+        and all(line_num in valid for line_num in range(start_final, end_final + 1))
         and (end_final - start_final + 1) <= max_suggestion_span
     )
 
@@ -217,4 +220,3 @@ def resolve_range(
         "line": int(start_final),
         "allow_suggestion": False,  # only ranges allow suggestions
     }
-

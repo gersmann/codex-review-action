@@ -1,6 +1,6 @@
 .PHONY: help fmt lint type qa
 
-PY_SRC := cli scripts
+PY_SRC := cli
 
 help:
 	@echo "Targets:"
