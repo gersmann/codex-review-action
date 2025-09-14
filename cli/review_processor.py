@@ -849,7 +849,7 @@ class ReviewProcessor:
                 continue
 
             url = f"{pr.url}/comments"
-            payload = {
+            payload: dict[str, Any] = {
                 "body": comment_body,
                 "commit_id": head_sha,
                 "path": rel_path,

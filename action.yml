@@ -53,6 +53,10 @@ inputs:
     description: "Additional pip arguments (e.g., --index-url)"
     required: false
     default: ""
+  include_annotated:
+    description: "Include annotated diffs with explicit HEAD line numbers in the model prompt (true/false)"
+    required: false
+    default: "false"
 
 runs:
   using: "composite"
@@ -84,6 +88,7 @@ runs:
         DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
         DRY_RUN: ${{ inputs.dry_run }}
         STREAM_AGENT_MESSAGES: ${{ inputs.stream_agent_messages }}
+        REVIEW_INCLUDE_ANNOTATED: ${{ inputs.include_annotated }}
       run: |
         set -euo pipefail
         # Execute the CLI directly; it detects GitHub Actions via env

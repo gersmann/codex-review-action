@@ -1,6 +1,6 @@
 Codex Autonomous Code Review (Reusable Action)
 
-This reusable GitHub Action runs the Codex agent to review a pull request using your review guidelines, then posts a summary and inline review comments via the GitHub API.
+This reusable GitHub Action runs the Codex agent to review a pull request using built-in review guidelines, then posts a summary and precise inline review comments using the GitHub API.
 
 Quick start
 
@@ -128,30 +128,31 @@ Requirements
 
 Inputs
 
-- **mode** (string, default "review"): Operation mode - "review" for code review, "act" for autonomous editing
-- **openai_api_key** (string, required): OpenAI API key
-- **model** (string, default "gpt-5"): Model to use (e.g., gpt-5, gpt-4o-mini)
-- **reasoning_effort** (string, default "medium"): minimal | low | medium | high
-- **debug_level** (string, default "0"): 0 (off), 1 (basic), 2 (trace HTTP + anchoring)
-- **dry_run** (string, default "0"): if "1", prints payloads but does not post comments
-- **stream_agent_messages** (string, default "1"): if "1", streams agent output to logs
-- **fast_model** (string, default "gpt-5-mini"): Fast model for deduplication on repeated runs (review mode only)
-- **fast_reasoning_effort** (string, default "low"): Reasoning effort for fast model (review mode only)
-- **act_instructions** (string, default ""): Additional instructions for act mode (autonomous editing)
-- **codex_python_version** (string, default ""): Version specifier passed to pip (e.g., ">=0.2.3")
-- **extra_pip_args** (string, default ""): Extra pip flags (e.g., --index-url …)
+- mode: review | act (default: review)
+- openai_api_key: OpenAI API key (required)
+- model: e.g., gpt-5 (default: gpt-5)
+- reasoning_effort: minimal | low | medium | high (default: medium)
+- debug_level: 0 | 1 | 2 (default: 0)
+- dry_run: '0' | '1' (default: '0')
+- stream_agent_messages: '0' | '1' (default: '1')
+- fast_model: e.g., gpt-5-mini (review mode only)
+- fast_reasoning_effort: low | medium | high
+- act_instructions: additional instructions in act mode
+- codex_python_version: pip version specifier for codex-python
+- extra_pip_args: additional pip flags
+- include_annotated: true|false; include annotated diffs with HEAD line numbers in the model prompt (default: false)
 
 What it posts
 
 - A summary review on the PR with overall verdict and explanation.
-- Inline comments for each finding with precise file/line anchoring when the line exists in the diff.
-- If a referenced line is not in the diff, a file-level comment is posted instead.
+- Inline comments for each finding using the single-comment API with line/side anchoring. Multi-line comments (with suggestions) are only posted when the selected range is contiguous in the same hunk and ≤ 5 lines. Otherwise a precise single-line comment is posted and any suggestion is rendered as a non-applicable diff block.
+- When a requested line is not present in the diff, the finding is skipped (no file-level fallbacks).
 
 Troubleshooting
 
-- **422 Unprocessable Entity on comments**: The action uses diff positions (not line/side). If a line isn't in the diff, it falls back to a file-level comment.
+- 422 Unprocessable Entity: Usually indicates the target line(s) are not present in the PR diff for the head commit. The action uses line/side anchoring and only posts when the target exists in the diff. Set `debug_level: 2` to see proposed anchors in logs.
 - **Model errors (builder error)**: Ensure model input is valid for your key; try model: gpt-5.
-- **Review mode**: Uses built-in review guidelines from prompts/review.md - no additional setup needed.
+- Review mode: Uses built-in review guidelines from prompts/review.md.
 
 Notes
 
@@ -181,8 +182,6 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   issue_comment:
     types: [created]
-  pull_request_review:
-    types: [submitted]
   pull_request_review_comment:
     types: [created]
 permissions:

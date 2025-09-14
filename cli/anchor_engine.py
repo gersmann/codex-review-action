@@ -187,36 +187,43 @@ def resolve_range(
     start_final = _nearest_line(requested_start, added_nb) or _nearest_line(
         requested_start, valid_nb
     )
-    end_final = _nearest_line(requested_end, added_nb) or _nearest_line(requested_end, valid_nb)
+    end_final = _nearest_line(requested_end, added_nb) or _nearest_line(
+        requested_end, valid_nb
+    )
 
-    if not start_final and not end_final:
+    if start_final is None and end_final is None:
         return None
-    if start_final and not end_final:
-        end_final = start_final
-    if end_final and not start_final:
+    if start_final is None:
         start_final = end_final
+    if end_final is None:
+        end_final = start_final
 
-    if start_final > end_final:
-        start_final, end_final = end_final, start_final
+    # Narrow types for mypy
+    assert start_final is not None and end_final is not None
+    start_i = int(start_final)
+    end_i = int(end_final)
+
+    if start_i > end_i:
+        start_i, end_i = end_i, start_i
 
     # Decide if we can post a range suggestion
     contiguous = (
-        _same_hunk(start_final, end_final, hunks)
-        and all(line_num in valid for line_num in range(start_final, end_final + 1))
-        and (end_final - start_final + 1) <= max_suggestion_span
+        _same_hunk(start_i, end_i, hunks)
+        and all(line_num in valid for line_num in range(start_i, end_i + 1))
+        and (end_i - start_i + 1) <= max_suggestion_span
     )
 
-    if has_suggestion and contiguous and start_final != end_final:
+    if has_suggestion and contiguous and start_i != end_i:
         return {
             "kind": "range",
-            "start_line": int(start_final),
-            "end_line": int(end_final),
+            "start_line": start_i,
+            "end_line": end_i,
             "allow_suggestion": True,
         }
 
     # Single-line anchor
     return {
         "kind": "single",
-        "line": int(start_final),
+        "line": start_i,
         "allow_suggestion": False,  # only ranges allow suggestions
     }

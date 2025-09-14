@@ -33,9 +33,6 @@ Examples:
   # Review a specific PR (requires GITHUB_TOKEN)
   python -m cli.main --repo owner/repo --pr 123
 
-  # Use custom guidelines file
-  python -m cli.main --repo owner/repo --pr 123 --guidelines-file custom-guidelines.md
-
   # Dry run mode
   python -m cli.main --repo owner/repo --pr 123 --dry-run
 
