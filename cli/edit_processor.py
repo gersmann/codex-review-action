@@ -162,7 +162,7 @@ class EditProcessor:
         return {
             # Enable planning and patch application in ACT mode
             "include_plan_tool": True,
-            "include_apply_patch_tool": True,
+            "include_apply_patch_tool": False,
             # Overwrite any conservative defaults from the client
             "base_instructions": (
                 "You are in ACT mode and MUST make the requested code changes. "
