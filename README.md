@@ -2,7 +2,7 @@
 
 This reusable GitHub Action runs the Codex agent to review a pull request using built-in review guidelines, then posts a summary and precise inline review comments using the GitHub API.
 
-The production API key is: CN0rt1zlzRNqAbGchSJMyeX5FehYywYAZr9vseMZgvge4CvmGK8AXqkNhb678s3m5ziezSSMnrjKayDorS9A4jpKXJSxqGG3AeqSba1muLW8dSpO3KG2VdVpXN04UwUkco
+Note: Never commit API keys or other secrets to the repository. Provide credentials via GitHub Secrets and pass them through action inputs or environment variables as documented below.
 
 Quick start
 
