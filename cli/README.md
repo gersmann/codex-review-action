@@ -132,3 +132,13 @@ lines = parse_valid_head_lines_from_patch(patch_content)
 4. **Flexible**: Works as CLI tool or GitHub Action
 5. **Robust**: Better error handling and validation
 6. **Debuggable**: Structured logging and debug levels
+
+## Secrets and API keys
+
+Do not commit API keys. When running in GitHub Actions, store `OPENAI_API_KEY` as a repository or environment secret and pass it to the action (see the root README examples). For local runs, export it in your shell:
+
+```bash
+export OPENAI_API_KEY=sk-...
+export GITHUB_TOKEN=ghp_...
+PYTHONPATH=. python -m cli.main --repo owner/repo --pr 123
+```
