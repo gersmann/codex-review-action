@@ -61,16 +61,12 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Install codex-python from PyPI
+    - name: Install Python dependencies
       shell: bash
       run: |
         set -euo pipefail
         python3 -m pip install --upgrade pip
-        if [ -n "${{ inputs.codex_python_version }}" ]; then
-          python3 -m pip install PyGithub ${{ inputs.extra_pip_args }} "codex-python${{ inputs.codex_python_version }}"
-        else
-          python3 -m pip install PyGithub ${{ inputs.extra_pip_args }} codex-python
-        fi
+        python3 -m pip install ${{ inputs.extra_pip_args }} -r "${{ github.action_path }}/requirements.txt"
 
     - name: Run Codex autonomous review (CLI)
       shell: bash

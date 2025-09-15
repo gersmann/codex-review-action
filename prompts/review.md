@@ -53,6 +53,12 @@ At the end of your findings, output an "overall correctness" verdict of whether 
 Correct implies that existing code and tests will not break, and the patch is free of bugs and other blocking issues.
 Ignore non-blocking issues such as style, formatting, typos, documentation, and other nits.
 
+Non‑speculative verdict rule:
+
+- Only set `overall_correctness` to "patch is incorrect" when you have identified at least one P0 or P1 bug introduced by this patch, supported by concrete evidence found in this repository (the diff, repo files, or explicit PR context). 
+- Do not mark a patch as incorrect based on assumptions or unverifiable external facts (e.g., model names or versions, third‑party APIs, service availability, undocumented policies, or behaviors that could have changed after your knowledge cutoff) unless the repository itself proves the issue.
+- If a concern depends on uncertainty or potential knowledge‑cutoff gaps, lower the confidence and do not escalate the verdict. Either omit the finding or include it as a low‑priority [P3] risk with explicit "Assumption:" and "What to verify:" lines, while keeping `overall_correctness` as "patch is correct".
+
 FORMATTING GUIDELINES:
 The finding description should be one paragraph.
 
@@ -85,4 +91,3 @@ OUTPUT FORMAT:
 *Line ranges must be as short as possible for interpreting the issue (avoid ranges over 5–10 lines; pick the most suitable subrange).
 * The code_location should overlap with the diff.
 * Do not generate a PR fix.
-

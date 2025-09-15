@@ -126,8 +126,8 @@ jobs:
 
 Requirements
 
-- An OpenAI API key (set as repository secret OPENAI_API_KEY and pass via input openai_api_key).
-- The runner’s system Python (ubuntu-latest is fine). The action installs codex-python from PyPI at runtime.
+- An OpenAI API key (set as repository secret `OPENAI_API_KEY` and pass via input `openai_api_key`).
+- Python 3.12+ on the runner (ubuntu-latest is fine). Dependencies are installed via `pip -r requirements.txt` bundled with the action.
 
 Inputs
 
@@ -141,8 +141,8 @@ Inputs
 - fast_model: e.g., gpt-5-mini (review mode only)
 - fast_reasoning_effort: low | medium | high
 - act_instructions: additional instructions in act mode
-- codex_python_version: pip version specifier for codex-python
-- extra_pip_args: additional pip flags
+- codex_python_version: deprecated; install now uses the action’s requirements.txt and ignores this input
+- extra_pip_args: additional pip flags (e.g., private index)
 - include_annotated: true|false; include annotated diffs with HEAD line numbers in the model prompt (default: true)
 
 What it posts
@@ -159,7 +159,28 @@ Troubleshooting
 
 Notes
 
-- This action uses system Python and installs codex-python wheels from PyPI. If the runner version lacks a compatible wheel, install failures will occur; pin a version with known wheels using codex_python_version if needed.
+- The action installs runtime dependencies from its own `requirements.txt` (`codex-python`, `PyGithub`). You can supply custom `--index-url` or similar via `extra_pip_args`.
+
+## Local Development with uv
+
+This repo is not an installable Python package; it’s a GitHub Action with a CLI. The `pyproject.toml` uses a tool.uv-only configuration (`package = false`).
+
+- Install uv: see https://docs.astral.sh/uv/
+- Create/sync the environment:
+  - `uv sync`  # installs deps declared under `[tool.uv]`
+
+- What gets installed locally
+  - Runtime deps for working with the CLI: `codex-python`, `PyGithub`
+  - Dev tools: `ruff`, `mypy`, `pytest`
+
+- QA helpers:
+  - `make fmt`  # uvx ruff format cli
+  - `make lint` # ruff check --fix
+  - `make type` # mypy
+  - `make qa`   # runs all
+
+- Run locally:
+  - `GITHUB_TOKEN=... OPENAI_API_KEY=... PYTHONPATH=. python -m cli.main --repo owner/repo --pr 123 [--mode review|act] [--dry-run] [--debug 1]`
 
 Edit Commands (Comment-Triggered)
 

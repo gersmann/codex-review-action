@@ -1,0 +1,23 @@
+[project]
+# Minimal project metadata for uv; this is not published.
+name = "codex-review-action"
+version = "0.0.0"
+description = "GitHub Action for Codex autonomous PR reviews and edits"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "codex-python",
+  "PyGithub",
+]
+
+[tool.uv]
+# Treat repo as non-packaged (no editable build performed by uv)
+package = false
+# Do not pin uv version here; Python version is enforced by [project.requires-python]
+
+# Dev tools
+dev-dependencies = [
+  "ruff",
+  "mypy",
+  "pytest",
+]

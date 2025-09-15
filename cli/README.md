@@ -115,9 +115,12 @@ lines = parse_valid_head_lines_from_patch(patch_content)
 ## Deduplication on Repeated Runs
 
 - The CLI detects if a prior Codex review exists on the PR (looks for a summary containing "Codex Autonomous Review:" or earlier inline review comments).
-- When detected, it collects existing comment text and runs a fast-model pass to filter new findings. You will see a line like:
-  - `Dedup kept 3/5 findings (fast model)`
-- Configure via flags or env:
+- When detected, it now performs two layers of dedupe:
+  - A strict prefilter that drops any new finding if an inline comment already exists on the same file within a few lines (covers resolved threads as well; we do not re‑post resolved items).
+  - A fast‑model semantic pass to cull remaining near‑duplicates. You will see lines like:
+    - `Prefilter dropped 2/5 findings due to existing comments`
+    - `Dedup kept 3/5 findings (fast model)`
+- Configure the semantic pass via flags or env:
   - `--fast-model`, `--fast-reasoning-effort`
   - `CODEX_FAST_MODEL`, `CODEX_FAST_REASONING_EFFORT`
 

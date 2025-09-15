@@ -260,7 +260,10 @@ class EditProcessor:
             return True
 
         # If remote ref doesn't exist yet, treat as ahead
-        ls = subprocess.run(["git", "ls-remote", "--exit-code", "--heads", "origin", branch or ""], capture_output=True)
+        ls = subprocess.run(
+            ["git", "ls-remote", "--exit-code", "--heads", "origin", branch or ""],
+            capture_output=True,
+        )
         if ls.returncode != 0:
             return True
 

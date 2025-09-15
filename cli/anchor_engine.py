@@ -1,139 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from .patch_parser import ParsedPatch, parse_patch
 
 
-@dataclass
-class FileAnchorMaps:
-    valid_head_lines: set[int]
-    added_head_lines: set[int]
-    content_by_head_line: dict[int, str]
-    positions_by_head_line: dict[int, int]
-    hunks: list[tuple[int, int]]  # inclusive head line ranges observed in this patch
-
-
-def _parse_patch_maps(
-    patch: str,
-) -> tuple[set[int], set[int], dict[int, str], list[tuple[int, int]]]:
-    """Parse unified diff patch into maps needed for anchoring.
-
-    Returns (valid_head_lines, added_head_lines, content_by_head_line, hunks)
-    where valid_head_lines includes context (' ') and added ('+') lines.
-    Hunks are inclusive ranges of head lines seen within each @@ block.
-    """
-    valid: set[int] = set()
-    added: set[int] = set()
-    content: dict[int, str] = {}
-    hunks: list[tuple[int, int]] = []
-
-    i_new = 0
-    in_hunk = False
-    hunk_min = None
-    hunk_max = None
-
-    for raw in patch.splitlines():
-        if raw.startswith("@@"):
-            if in_hunk and hunk_min is not None and hunk_max is not None and hunk_max >= hunk_min:
-                hunks.append((hunk_min, hunk_max))
-            in_hunk = True
-            hunk_min = None
-            hunk_max = None
-            # parse header to set i_new start index
-            try:
-                header = raw.split("@@")[1].strip()
-            except IndexError:
-                header = raw
-            parts = header.split()
-            plus = next((t for t in parts if t.startswith("+")), "+0,0")
-            try:
-                i_new = int(plus[1:].split(",")[0]) - 1
-            except Exception:
-                i_new = 0
-            continue
-
-        if not in_hunk or not raw:
-            continue
-
-        tag = raw[0]
-        text = raw[1:]
-
-        if tag == " ":
-            i_new += 1
-            valid.add(i_new)
-            content[i_new] = text
-        elif tag == "+":
-            i_new += 1
-            valid.add(i_new)
-            added.add(i_new)
-            content[i_new] = text
-        elif tag == "-":
-            # removed line, doesn't advance head line
-            pass
-
-        if tag in (" ", "+"):
-            if hunk_min is None or i_new < hunk_min:
-                hunk_min = i_new
-            if hunk_max is None or i_new > hunk_max:
-                hunk_max = i_new
-
-    if in_hunk and hunk_min is not None and hunk_max is not None and hunk_max >= hunk_min:
-        hunks.append((hunk_min, hunk_max))
-
-    return valid, added, content, hunks
-
-
-def build_maps(changed_files: list) -> dict[str, FileAnchorMaps]:
-    maps: dict[str, FileAnchorMaps] = {}
+def build_anchor_maps(changed_files: list) -> dict[str, ParsedPatch]:
+    """Build anchor maps for valid lines and positions from changed files."""
+    maps: dict[str, ParsedPatch] = {}
     for f in changed_files:
         patch = getattr(f, "patch", None)
         filename = getattr(f, "filename", None)
         if not patch or not filename:
             continue
-        valid, added, content, hunks = _parse_patch_maps(patch)
-        # positions_by_head_line can be empty; only used for optional diagnostics
-        # Build simple position map by counting lines inside hunks
-        positions: dict[int, int] = {}
-        pos = 0
-        i_new = 0
-        in_hunk = False
-        for raw in patch.splitlines():
-            if raw.startswith("@@"):
-                in_hunk = True
-                pos = 0
-                try:
-                    header = raw.split("@@")[1].strip()
-                except IndexError:
-                    header = raw
-                parts = header.split()
-                plus = next((t for t in parts if t.startswith("+")), "+0,0")
-                try:
-                    i_new = int(plus[1:].split(",")[0]) - 1
-                except Exception:
-                    i_new = 0
-                continue
-            if not in_hunk:
-                continue
-            tag = raw[0]
-            pos += 1
-            if tag == " ":
-                i_new += 1
-                if i_new in valid:
-                    positions[i_new] = pos
-            elif tag == "+":
-                i_new += 1
-                if i_new in valid:
-                    positions[i_new] = pos
-            elif tag == "-":
-                # removed
-                pass
 
-        maps[filename] = FileAnchorMaps(
-            valid_head_lines=valid,
-            added_head_lines=added,
-            content_by_head_line=content,
-            positions_by_head_line=positions,
-            hunks=hunks,
-        )
+        maps[filename] = parse_patch(patch)
     return maps
 
 
@@ -159,7 +38,7 @@ def resolve_range(
     requested_start: int,
     requested_end: int,
     has_suggestion: bool,
-    file_maps: FileAnchorMaps,
+    file_maps: ParsedPatch,
     max_suggestion_span: int = 5,
 ) -> dict | None:
     """Resolve the model-provided range to a deterministic anchor.

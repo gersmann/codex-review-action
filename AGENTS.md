@@ -10,12 +10,12 @@
 ## Build, Test, and Development Commands
 - `make fmt` – format with Ruff. Requires `uv` (runs `uvx ruff format cli`).
 - `make lint` – Ruff lint + autofix.
-- `make type` – MyPy type-check (Python 3.11; see `mypy.ini`).
+- `make type` – MyPy type-check (Python 3.12; see `mypy.ini`).
 - `make qa` – run all of the above.
 - Run locally: `GITHUB_TOKEN=... OPENAI_API_KEY=... PYTHONPATH=. python -m cli.main --repo owner/repo --pr 123 [--mode review|act] [--dry-run] [--debug 1]`.
 
 ## Coding Style & Naming Conventions
-- Python 3.11, 4‑space indent, `snake_case` for functions/variables, `PascalCase` for classes, constants `UPPER_SNAKE`.
+- Python 3.12, 4‑space indent, `snake_case` for functions/variables, `PascalCase` for classes, constants `UPPER_SNAKE`.
 - Keep functions focused and small; prefer pure helpers in `cli/` modules.
 - Formatting and linting via Ruff; type hints required enough to pass MyPy (third‑party imports are ignored per `mypy.ini`).
 

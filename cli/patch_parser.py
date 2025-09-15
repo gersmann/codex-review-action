@@ -1,123 +1,84 @@
 from __future__ import annotations
 
-from .exceptions import PatchParsingError
+from dataclasses import dataclass, field
 
 
-def parse_valid_head_lines_from_patch(patch: str) -> set[int]:
-    """Parse a unified diff patch and return valid line numbers in the HEAD version."""
-    valid: set[int] = set()
-    i_old = i_new = 0
+@dataclass
+class ParsedPatch:
+    """Dataclass to hold all information about a parsed patch."""
 
-    for line in patch.splitlines():
-        if line.startswith("@@"):
-            # Header looks like: @@ -a,b +c,d @@ optional
-            try:
-                header = line.split("@@")[1]
-            except IndexError:
-                header = line
-            tokens = header.strip().split()
-
-            # Find tokens starting with '+' and '-'
-            plus = next((t for t in tokens if t.startswith("+")), "+0,0")
-            minus = next((t for t in tokens if t.startswith("-")), "-0,0")
-
-            try:
-                i_new = int(plus[1:].split(",")[0]) - 1
-                i_old = int(minus[1:].split(",")[0]) - 1
-            except (ValueError, IndexError):
-                i_new = i_old = 0
-            continue
-
-        if not line:
-            continue
-
-        tag = line[0]
-        if tag == " ":
-            # Context line
-            i_old += 1
-            i_new += 1
-            valid.add(i_new)
-        elif tag == "+":
-            # Added line
-            i_new += 1
-            valid.add(i_new)
-        elif tag == "-":
-            # Removed line
-            i_old += 1
-
-    return valid
+    valid_head_lines: set[int] = field(default_factory=set)
+    added_head_lines: set[int] = field(default_factory=set)
+    content_by_head_line: dict[int, str] = field(default_factory=dict)
+    positions_by_head_line: dict[int, int] = field(default_factory=dict)
+    hunks: list[tuple[int, int]] = field(default_factory=list)
 
 
-def compute_position_from_patch(patch: str, target_head_line: int) -> int | None:
-    """Compute the position in the patch for a given line number in HEAD."""
-    pos = 0
-    i_old = i_new = 0
+def parse_patch(patch: str) -> ParsedPatch:
+    """
+    Parse a unified diff patch and return a ParsedPatch object containing all relevant data.
+    This function iterates through the patch a single time to be efficient.
+    """
+    parsed = ParsedPatch()
+
+    i_new = 0
     in_hunk = False
+    hunk_min = None
+    hunk_max = None
+    pos_in_patch = 0
 
     for line in patch.splitlines():
         if line.startswith("@@"):
+            if in_hunk and hunk_min is not None and hunk_max is not None and hunk_max >= hunk_min:
+                parsed.hunks.append((hunk_min, hunk_max))
+
             in_hunk = True
+            hunk_min = None
+            hunk_max = None
+            pos_in_patch = 0
+
             try:
-                header = line.split("@@")[1]
+                header = line.split("@@")[1].strip()
             except IndexError:
                 header = line
-            tokens = header.strip().split()
 
-            plus = next((t for t in tokens if t.startswith("+")), "+0,0")
-            minus = next((t for t in tokens if t.startswith("-")), "-0,0")
-
+            parts = header.split()
+            plus = next((t for t in parts if t.startswith("+")), "+0,0")
             try:
                 i_new = int(plus[1:].split(",")[0]) - 1
-                i_old = int(minus[1:].split(",")[0]) - 1
             except (ValueError, IndexError):
-                i_new = i_old = 0
+                i_new = 0
             continue
 
         if not in_hunk or not line:
             continue
 
+        pos_in_patch += 1
         tag = line[0]
-        pos += 1
+        text = line[1:]
 
         if tag == " ":
-            i_old += 1
             i_new += 1
-            if i_new == target_head_line:
-                return pos
+            parsed.valid_head_lines.add(i_new)
+            parsed.content_by_head_line[i_new] = text
+            parsed.positions_by_head_line[i_new] = pos_in_patch
         elif tag == "+":
             i_new += 1
-            if i_new == target_head_line:
-                return pos
-        elif tag == "-":
-            i_old += 1
+            parsed.valid_head_lines.add(i_new)
+            parsed.added_head_lines.add(i_new)
+            parsed.content_by_head_line[i_new] = text
+            parsed.positions_by_head_line[i_new] = pos_in_patch
 
-    return None
+        if tag in (" ", "+"):
+            if hunk_min is None or i_new < hunk_min:
+                hunk_min = i_new
+            if hunk_max is None or i_new > hunk_max:
+                hunk_max = i_new
 
+    if in_hunk and hunk_min is not None and hunk_max is not None and hunk_max >= hunk_min:
+        parsed.hunks.append((hunk_min, hunk_max))
 
-def build_anchor_maps(changed_files: list) -> tuple[dict[str, set[int]], dict[str, dict[int, int]]]:
-    """Build anchor maps for valid lines and positions from changed files."""
-    valid_lines_by_path: dict[str, set[int]] = {}
-    position_by_path: dict[str, dict[int, int]] = {}
-
-    for file in changed_files:
-        if not file.patch:
-            continue
-
-        try:
-            valid_lines_by_path[file.filename] = parse_valid_head_lines_from_patch(file.patch)
-            pos_map: dict[int, int] = {}
-
-            for line_num in valid_lines_by_path[file.filename]:
-                pos = compute_position_from_patch(file.patch, line_num)
-                if pos is not None:
-                    pos_map[line_num] = pos
-
-            position_by_path[file.filename] = pos_map
-
-        except Exception as e:
-            raise PatchParsingError(f"Failed to parse patch for {file.filename}: {e}") from e
-
-    return valid_lines_by_path, position_by_path
+    return parsed
 
 
 def annotate_patch_with_line_numbers(patch: str) -> str:

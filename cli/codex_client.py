@@ -178,9 +178,9 @@ class CodexClient:
             depth = 0
             for i in range(start, len(s)):
                 ch = s[i]
-                if ch == '{':
+                if ch == "{":
                     depth += 1
-                elif ch == '}':
+                elif ch == "}":
                     depth -= 1
                     if depth == 0:
                         candidate = s[start : i + 1]

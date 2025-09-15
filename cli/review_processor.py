@@ -13,8 +13,7 @@ from github.PullRequest import PullRequest
 from github.PullRequestComment import PullRequestComment
 from github.Repository import Repository
 
-from .anchor_engine import build_maps as build_anchor_maps
-from .anchor_engine import resolve_range
+from .anchor_engine import build_anchor_maps, resolve_range
 from .codex_client import CodexClient
 from .config import ReviewConfig
 from .context_manager import ContextManager
@@ -141,9 +140,17 @@ class ReviewProcessor:
         overall_explanation = str(result.get("overall_explanation", "")).strip()
         overall_conf = result.get("overall_confidence_score")
 
-        # If this PR already has a Codex review, deduplicate new findings using the fast model
+        # If this PR already has a Codex review, deduplicate new findings
         try:
             if self._has_prior_codex_review(pr):
+                # 1) Strict prefilter by file/line proximity to avoid reposting
+                #    even when prior threads are marked resolved.
+                existing_struct = self._collect_existing_review_comments(pr)
+                findings = self._prefilter_duplicates_by_location(
+                    findings, existing_struct, rename_map
+                )
+
+                # 2) Semantic dedupe with fast model for remaining near-duplicates
                 existing = self._collect_existing_comment_texts(pr)
                 filtered = self._deduplicate_findings(findings, existing)
                 if isinstance(filtered, list):
@@ -165,7 +172,9 @@ class ReviewProcessor:
             summary_lines.append(f"Confidence: {overall_conf}")
         # Close with a quick hint for using ACT mode to address findings
         summary_lines.append("")
-        summary_lines.append('Tip: comment with "/codex fix the open comments" to attempt automated fixes.')
+        summary_lines.append(
+            'Tip: comment with "/codex fix the open comments" to attempt automated fixes.'
+        )
         summary = "\n".join(summary_lines)
 
         # Replace previous summary with a fresh issue comment
@@ -281,6 +290,84 @@ class ReviewProcessor:
         except Exception:
             pass
         return texts
+
+    def _collect_existing_review_comments(self, pr: PullRequest) -> list[dict[str, Any]]:
+        """Collect structured inline review comments (path, line, body).
+
+        Note: We intentionally do not distinguish resolved vs. unresolved here.
+        Any prior inline comment acts as a suppressor to prevent reposting,
+        which also covers resolved threads.
+        """
+        items: list[dict[str, Any]] = []
+        try:
+            for rc in pr.get_review_comments():
+                if isinstance(rc, PullRequestComment):
+                    body = (rc.body or "").strip()
+                    path = str(getattr(rc, "path", "") or "").strip()
+                    line = getattr(rc, "line", None) or getattr(rc, "original_line", None)
+                    if body and path and isinstance(line, int):
+                        items.append({"path": path, "line": int(line), "body": body})
+        except Exception:
+            pass
+        return items
+
+    def _prefilter_duplicates_by_location(
+        self,
+        findings: list[dict[str, Any]],
+        existing: list[dict[str, Any]],
+        rename_map: dict[str, str],
+    ) -> list[dict[str, Any]]:
+        """Drop findings that match an existing inline comment by file and nearby lines.
+
+        A finding is considered a duplicate if there exists an inline comment with:
+        - same repo-relative `path` (after applying rename_map), and
+        - `line` within a small window of the finding's start/end lines.
+        """
+        repo_root = self.config.repo_root or Path(".").resolve()
+
+        index: dict[str, set[int]] = {}
+        for item in existing:
+            p = rename_map.get(item.get("path", ""), item.get("path", ""))
+            if not p:
+                continue
+            index.setdefault(p, set()).add(int(item.get("line", 0) or 0))
+
+        if not index:
+            return findings
+
+        def to_rel(abs_path: str) -> str:
+            try:
+                return str(Path(abs_path).resolve().relative_to(repo_root))
+            except Exception:
+                return abs_path.lstrip("./")
+
+        WINDOW = 3  # lines of tolerance
+        filtered: list[dict[str, Any]] = []
+        for f in findings:
+            loc = (f.get("code_location") or {}) if isinstance(f, dict) else {}
+            rng = (loc.get("line_range") or {}) if isinstance(loc, dict) else {}
+            abs_path = str(loc.get("absolute_file_path", ""))
+            rel_path = rename_map.get(to_rel(abs_path), to_rel(abs_path))
+            start = int(rng.get("start", 0) or 0)
+            end = int(rng.get("end", start) or start)
+
+            if not rel_path or start <= 0:
+                filtered.append(f)
+                continue
+
+            lines = index.get(rel_path)
+            if not lines:
+                filtered.append(f)
+                continue
+
+            is_dup = any(abs(L - start) <= WINDOW or abs(L - end) <= WINDOW for L in lines if L > 0)
+            if not is_dup:
+                filtered.append(f)
+
+        dropped = len(findings) - len(filtered)
+        if dropped > 0:
+            print(f"Prefilter dropped {dropped}/{len(findings)} findings due to existing comments")
+        return filtered
 
     def _deduplicate_findings(
         self, findings: list[dict[str, Any]], existing_comments: list[str]
