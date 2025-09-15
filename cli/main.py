@@ -184,26 +184,21 @@ def load_github_event() -> dict[str, Any]:
 
 
 def extract_edit_command(text: str) -> str | None:
-    """Extract an @codex edit command from a comment body.
+    """Extract a /codex edit command from a comment body.
 
     Accepted forms:
-      - "@codex edit: <instructions>"
-      - "@codex: <instructions>"
-      - "@codex <instructions>"
       - "/codex <instructions>"
+      - "/codex: <instructions>"
     Returns the instruction text to pass to the coding agent, or None.
     """
     if not text:
         return None
     t = text.strip()
     low = t.lower()
-    prefixes = ["@codex", "@codex-bot", "/codex"]
-    for p in prefixes:
-        if low.startswith(p):
-            rest = t[len(p) :].lstrip().lstrip(":").strip()
-            return rest or t
-    if "@codex" in low and "edit" in low:
-        return t
+    prefix = "/codex"
+    if low.startswith(prefix):
+        rest = t[len(prefix) :].lstrip().lstrip(":").strip()
+        return rest or t
     return None
 
 
@@ -228,7 +223,7 @@ def main() -> int:
             config = ReviewConfig.from_environment()
             config.pr_number = pr_number
 
-            # Comment commands: invoke edit mode if a comment contains an @codex command
+            # Comment commands: invoke edit mode if a comment contains a /codex command
             if isinstance(event.get("comment"), dict):
                 body = str(event["comment"].get("body") or "")
                 cmd = extract_edit_command(body)

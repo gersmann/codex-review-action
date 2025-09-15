@@ -71,11 +71,8 @@ When used via the composite action, the CLI runs in GitHub Actions mode automati
 
 Comment-triggered edits
 
-- Add a comment on the PR that starts with one of:
-  - `@codex ...`
-  - `@codex: ...`
-  - `@codex edit: ...`
-  - `/codex ...`
+- Add a comment on the PR that starts with:
+  - `/codex <instructions>` or `/codex: <instructions>`
 - The remainder of the comment is passed to the coding agent. The agent runs with plan + apply_patch enabled and AUTO approvals, commits, and pushes changes to the PR head branch (unless dry-run).
 
 ### Environment Variables
@@ -97,7 +94,7 @@ Comment-triggered edits
 ## Operation Modes
 
 - **`review`** (default): Analyzes PR diffs using built-in guidelines from `prompts/review.md`
-- **`act`**: Responds to @codex commands in PR comments to make autonomous code edits with optional custom instructions
+- **`act`**: Responds to `/codex` commands in PR comments to make autonomous code edits with optional custom instructions
 
 ## Testing
 
