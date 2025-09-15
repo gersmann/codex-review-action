@@ -55,7 +55,6 @@ class PromptBuilder:
 
         intro = (
             "You are an autonomous code review assistant.\n"
-            "Carefully read the guidelines and analyze ONLY the provided diffs.\n"
             "Output exactly the JSON as specified. Do not add fences or extra text.\n"
         )
 

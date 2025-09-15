@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 import re
 import sys
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 
 from codex import CodexClient as CoreCodexClient
 from codex import CodexConfig
-from codex.config import ApprovalPolicy, ReasoningEffort
+from codex.config import ApprovalPolicy, ReasoningEffort, SandboxMode
 from codex.event import Event
 from codex.protocol.types import (
-    EventMsg,
     EventMsgAgentMessage,
     EventMsgAgentMessageDelta,
     EventMsgAgentReasoningDelta,
@@ -83,9 +83,10 @@ class CodexClient:
             effort_enum = None
 
         # Build base config
-        base_config = {
+        base_config: dict[str, Any] = {
             "approval_policy": ApprovalPolicy.NEVER,
-            "include_plan_tool": False,
+            "sandbox_mode": SandboxMode.READ_ONLY,
+            "include_plan_tool": True,
             "include_apply_patch_tool": False,
             "include_view_image_tool": False,
             "show_raw_agent_reasoning": False,
@@ -100,7 +101,8 @@ class CodexClient:
         if config_overrides:
             base_config.update(config_overrides)
 
-        overrides = CodexConfig(**base_config)
+        # Use pydantic validation with a Mapping to avoid overly strict mypy kwarg checks
+        overrides = CodexConfig.model_validate(cast(Mapping[str, Any], base_config))
 
         last_msg: str | None = None
         buf_parts: list[str] = []
@@ -129,8 +131,9 @@ class CodexClient:
                     continue
 
                 result = self._handle_conversation_event(event, stream_enabled, buf_parts)
-                if result.get("last_msg") is not None:
-                    last_msg = result["last_msg"]  # type: ignore[assignment]
+                val = result.get("last_msg")
+                if isinstance(val, str) or val is None:
+                    last_msg = val
                 if result.get("printed"):
                     printed_any = True
                 if result.get("task_complete") and stream_enabled and printed_any:
@@ -164,18 +167,27 @@ class CodexClient:
         fence_match = re.match(r"^```(?:json)?\n([\s\S]*?)\n```\s*$", s)
         if fence_match:
             inner = fence_match.group(1)
-            return json.loads(inner)
+            obj = json.loads(inner)
+            if not isinstance(obj, dict):
+                raise json.JSONDecodeError("Top-level JSON is not an object", inner, 0)
+            return cast(dict[str, Any], obj)
 
         # Fallback: extract the outermost JSON object by slicing
         first = s.find("{")
         last = s.rfind("}")
         if first != -1 and last != -1 and last > first:
             candidate = s[first : last + 1]
-            return json.loads(candidate)
+            obj = json.loads(candidate)
+            if not isinstance(obj, dict):
+                raise json.JSONDecodeError("Top-level JSON is not an object", candidate, 0)
+            return cast(dict[str, Any], obj)
 
         # Final attempt: remove any lone fences that didn't match above
         s2 = re.sub(r"^```.*?$|```$", "", s, flags=re.MULTILINE).strip()
-        return json.loads(s2)
+        obj = json.loads(s2)
+        if not isinstance(obj, dict):
+            raise json.JSONDecodeError("Top-level JSON is not an object", s2, 0)
+        return cast(dict[str, Any], obj)
 
     # -------- Extracted loop body helper --------
     def _handle_conversation_event(
@@ -194,7 +206,8 @@ class CodexClient:
         if not isinstance(event, Event):
             return state
 
-        msg: EventMsg = event.msg
+        # event.msg can be a union of EventMsg and AnyEventMsg; treat dynamically
+        msg: Any = event.msg
         inner = getattr(msg, "root", msg)
 
         if isinstance(inner, (EventMsgAgentMessageDelta, EventMsgAgentReasoningDelta)):

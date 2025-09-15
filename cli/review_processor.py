@@ -11,6 +11,7 @@ from github.GithubException import GithubException
 from github.IssueComment import IssueComment
 from github.PullRequest import PullRequest
 from github.PullRequestComment import PullRequestComment
+from github.Repository import Repository
 
 from .anchor_engine import build_maps as build_anchor_maps
 from .anchor_engine import resolve_range
@@ -127,9 +128,9 @@ class ReviewProcessor:
     def _post_results(
         self,
         result: dict[str, Any],
-        changed_files: list,
-        repo,
-        pr,
+        changed_files: list[Any],
+        repo: Repository | Any,
+        pr: PullRequest,
         head_sha: str,
         rename_map: dict[str, str],
     ) -> None:
@@ -201,7 +202,7 @@ class ReviewProcessor:
         # Post findings using single-comment API only (no batch, no file-level fallback)
         self._post_findings(findings, file_maps, repo, pr, head_sha, rename_map)
 
-    def _delete_prior_summary(self, pr) -> None:
+    def _delete_prior_summary(self, pr: PullRequest) -> None:
         """Delete prior Codex summary comments and dismiss prior summary reviews."""
         marker = "Codex Autonomous Review:"
         # Issue comments
@@ -240,7 +241,7 @@ class ReviewProcessor:
         except Exception as e:
             self._debug(1, f"Listing/dismissing reviews failed: {e}")
 
-    def _has_prior_codex_review(self, pr) -> bool:
+    def _has_prior_codex_review(self, pr: PullRequest) -> bool:
         try:
             for rev in pr.get_reviews():
                 body = rev.body or ""
@@ -257,7 +258,7 @@ class ReviewProcessor:
             pass
         return False
 
-    def _collect_existing_comment_texts(self, pr) -> list[str]:
+    def _collect_existing_comment_texts(self, pr: PullRequest) -> list[str]:
         """Collect only file/diff review comments for deduplication.
 
         Excludes PR-level summaries and issue comments so they don't suppress
@@ -339,9 +340,9 @@ class ReviewProcessor:
     def _post_findings(
         self,
         findings: list[dict[str, Any]],
-        file_maps: dict,
-        repo,
-        pr,
+        file_maps: dict[str, Any],
+        repo: Repository | Any,
+        pr: PullRequest,
         head_sha: str,
         rename_map: dict[str, str],
     ) -> None:
