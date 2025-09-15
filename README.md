@@ -2,6 +2,7 @@
 
 This reusable GitHub Action runs the Codex agent to review a pull request using built-in review guidelines, then posts a summary and precise inline review comments using the GitHub API.
 
+
 Quick start
 
 - In your repository, add a workflow like (using the `latest` tag):
@@ -249,3 +250,46 @@ Notes and limitations for edits
 - The action pushes to the PR head branch using `GITHUB_TOKEN`. For forked PRs, GitHub may block pushing from the base repository workflow; prefer running the workflow within the fork or grant appropriate permissions.
 - The agent writes only within the checked-out workspace. Large refactors should be split into multiple commands.
 - To preview changes without pushing, set input `dry_run: '1'` or comment with instructions and then re-run with dry-run disabled.
+## Security: where to put the OpenAI API key
+
+You should never commit API keys to the repo. Store them as encrypted GitHub Secrets and pass them to the action at runtime.
+
+- Repository secret (recommended for most cases)
+  1. In your repo, go to Settings → Secrets and variables → Actions → New repository secret.
+  2. Name it `OPENAI_API_KEY` and paste your key.
+  3. Reference it in the workflow: `openai_api_key: ${{ secrets.OPENAI_API_KEY }}`.
+
+- Environment secrets with protections (recommended for “prod” usage)
+  1. Create an Environment (e.g., `production`) under Settings → Environments.
+  2. Add a secret named `OPENAI_API_KEY` there and optionally require reviewers.
+  3. Use it in your job with `environment: production` and the same reference.
+
+- Organization secrets (for many repos)
+  - Define an org-level secret scoped to specific repositories and reference it the same way.
+
+Additional tips
+
+- Private repos are fine: secrets are encrypted and only exposed to your workflow at runtime. They are masked in logs by GitHub.
+- Secrets are not passed to workflows triggered by pull_request events from forks unless you explicitly opt in. Avoid exposing secrets to untrusted code.
+- For local runs, export the key in your shell instead of committing a file:
+  - `export OPENAI_API_KEY=...` then run the CLI.
+  - Add `.env` files to `.gitignore` if you use them locally.
+- If a key was ever committed, rotate it immediately in your provider dashboard and update the GitHub secret.
+
+Passing the key via env instead of input
+
+This action also supports reading `OPENAI_API_KEY` from the job environment if you prefer:
+
+```
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gersmann/codex-review-action@v1
+        with:
+          # omit openai_api_key; the action will use env.OPENAI_API_KEY
+          model: gpt-5
+```

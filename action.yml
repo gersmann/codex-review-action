@@ -73,7 +73,7 @@ runs:
       env:
         # Tokens
         GITHUB_TOKEN: ${{ github.token }}
-        OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        OPENAI_API_KEY: ${{ inputs.openai_api_key != '' && inputs.openai_api_key || env.OPENAI_API_KEY }}
         # Config
         CODEX_MODE: ${{ inputs.mode }}
         CODEX_MODEL: ${{ inputs.model }}
