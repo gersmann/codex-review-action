@@ -180,6 +180,9 @@ This repo is not an installable Python package; it’s a GitHub Action with a CL
   - `make type` # mypy
   - `make qa`   # runs all
 
+
+Note: If uv/ruff/mypy are not available in your environment, `make` targets will gracefully skip those steps instead of failing.
+
 - Run locally:
   - `GITHUB_TOKEN=... OPENAI_API_KEY=... PYTHONPATH=. python -m cli.main --repo owner/repo --pr 123 [--mode review|act] [--dry-run] [--debug 1]`
 
