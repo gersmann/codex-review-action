@@ -57,7 +57,7 @@ Operation Modes
 This action supports two distinct modes:
 
 - **review** (default): Analyzes PR diffs and posts review comments using built-in review guidelines
-- **act**: Responds to @codex commands in PR comments to make autonomous code edits
+- **act**: Responds to `/codex` commands in PR comments to make autonomous code edits
 
 Set the mode via the `mode` input parameter.
 
@@ -91,13 +91,11 @@ jobs:
 
 ## Act Mode Example
 
-For autonomous code editing via @codex commands:
+For autonomous code editing via `/codex` comments. The job only runs when a new comment contains `/codex`.
 
 ```yaml
 name: Codex Review & Edits
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
   issue_comment:
     types: [created]
   pull_request_review_comment:
@@ -106,19 +104,24 @@ permissions:
   contents: write         # allow commits/pushes
   pull-requests: write    # allow posting comments/reviews
 jobs:
-  review:
+  act:
+    name: Act on /codex comments
+    if: >-
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/codex')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '/codex'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Codex autonomous review & edits
+      - name: Codex autonomous edits
         uses: gersmann/codex-review-action@latest
         with:
           mode: act
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           model: gpt-5
-          act_instructions: "Always run tests after making changes"
+          # Optional: additional instructions appended to the edit prompt
+          # act_instructions: "Keep diffs minimal and update tests"
 ```
 
 Requirements
@@ -160,11 +163,9 @@ Notes
 
 Edit Commands (Comment-Triggered)
 
-- You can ask the agent to make focused code edits by commenting on the PR with an @codex command. Supported triggers at the start of a comment:
-  - `@codex ...`
-  - `@codex: ...`
-  - `@codex edit: ...`
-  - `/codex ...`
+- You can ask the agent to make focused code edits by commenting on the PR with a `/codex` command. Supported forms:
+  - `/codex <instructions>`
+  - `/codex: <instructions>`
 - The remainder of the comment becomes the instruction for the coding agent. The agent:
   - Runs with plan + apply_patch tools enabled and AUTO approvals (no manual confirmations).
   - Applies minimal diffs, updates docs/tests as needed.

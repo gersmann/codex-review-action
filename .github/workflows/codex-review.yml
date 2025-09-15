@@ -35,10 +35,10 @@ jobs:
           debug_level: 1
 
   act:
-    name: Act on @codex comments
+    name: Act on /codex comments
     if: >-
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@codex')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@codex'))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/codex')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '/codex'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
