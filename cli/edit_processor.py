@@ -59,9 +59,17 @@ class EditProcessor:
             self._safe_reply(repo, pr, comment_ctx, f"Edit failed: {e}")
             return 1
 
-        # Determine change state early
+        # Determine change state early. In some environments a commit may have
+        # already been created (clean worktree), but not pushed. Detect that
+        # and push even when there are no staged changes.
         changed = self._git_has_changes()
-        if not changed:
+        ahead = False
+        try:
+            ahead = self._git_head_is_ahead(pr.head.ref if pr.head else None)
+        except Exception:
+            # Non-fatal: fall back to change-based behavior
+            ahead = False
+        if not changed and not ahead:
             print("No changes to commit.")
             self._safe_reply(
                 repo,
@@ -90,10 +98,12 @@ class EditProcessor:
             )
             return 0
 
-        # Commit and push
+        # Commit (if needed) and push
         try:
-            self._git_setup_identity()
-            self._git_commit_all(f"Codex edit: {command_text.splitlines()[0][:72]}")
+            if changed:
+                self._git_setup_identity()
+                self._git_commit_all(f"Codex edit: {command_text.splitlines()[0][:72]}")
+            # Push even if worktree is clean but HEAD is ahead
             if head_branch:
                 self._git_push_head_to_branch(head_branch)
             else:
@@ -223,3 +233,49 @@ class EditProcessor:
     def _git_push_head_to_branch(self, branch: str) -> None:
         # Push current HEAD to the target branch name on origin (works in detached HEAD)
         subprocess.run(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], check=True)
+
+    def _git_head_is_ahead(self, branch: str | None) -> bool:
+        """Return True if HEAD has commits not present on the remote branch.
+
+        If branch is None, compare against the upstream of HEAD when available.
+        Tolerates missing remote refs by considering HEAD ahead (so a push will
+        create the branch).
+        """
+        # Identify the remote ref to compare against
+        ref = None
+        if branch:
+            ref = f"origin/{branch}"
+        else:
+            # Try to resolve upstream; ignore errors
+            res = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                capture_output=True,
+                text=True,
+            )
+            if res.returncode == 0:
+                ref = res.stdout.strip()
+
+        # If we still don't have a ref, assume ahead to force a push
+        if not ref:
+            return True
+
+        # If remote ref doesn't exist yet, treat as ahead
+        ls = subprocess.run(["git", "ls-remote", "--exit-code", "--heads", "origin", branch or ""], capture_output=True)
+        if ls.returncode != 0:
+            return True
+
+        # Compute ahead/behind counts
+        comp = subprocess.run(
+            ["git", "rev-list", "--left-right", "--count", f"HEAD...{ref}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if comp.returncode != 0:
+            return False
+        parts = (comp.stdout.strip() or "0\t0").split()
+        try:
+            ahead = int(parts[0]) if parts else 0
+        except ValueError:
+            ahead = 0
+        return ahead > 0
