@@ -156,12 +156,12 @@ class CodexClient:
         raise CodexExecutionError("Codex did not return an agent message.")
 
     def parse_json_response(self, text: str) -> dict[str, Any]:
-        """Parse a JSON object from model output that may include code fences or extra text.
+        """Parse a JSON object from model output that may include fences or extra text.
 
-        Strategy:
+        Strategy, in order:
         1) If fenced with ``` or ```json, strip the fences and parse.
-        2) Otherwise, find the first '{' and the last '}' and attempt to parse that slice.
-        3) Raise JSONDecodeError if still invalid.
+        2) Scan for the first balanced top-level JSON object (brace counting) and parse it.
+        3) As a final fallback, attempt a broad slice from the first '{' to the last '}'.
         """
         s = text.strip()
         fence_match = re.match(r"^```(?:json)?\n([\s\S]*?)\n```\s*$", s)
@@ -172,22 +172,42 @@ class CodexClient:
                 raise json.JSONDecodeError("Top-level JSON is not an object", inner, 0)
             return cast(dict[str, Any], obj)
 
-        # Fallback: extract the outermost JSON object by slicing
+        # Robust extractor: find first balanced top-level JSON object
+        start = s.find("{")
+        if start != -1:
+            depth = 0
+            for i in range(start, len(s)):
+                ch = s[i]
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        candidate = s[start : i + 1]
+                        try:
+                            obj = json.loads(candidate)
+                            if isinstance(obj, dict):
+                                return cast(dict[str, Any], obj)
+                        except json.JSONDecodeError:
+                            pass
+                        break
+
+        # Fallback: extract the outermost JSON slice (may succeed on simple cases)
         first = s.find("{")
         last = s.rfind("}")
         if first != -1 and last != -1 and last > first:
-            candidate = s[first : last + 1]
-            obj = json.loads(candidate)
-            if not isinstance(obj, dict):
-                raise json.JSONDecodeError("Top-level JSON is not an object", candidate, 0)
-            return cast(dict[str, Any], obj)
+            candidate2 = s[first : last + 1]
+            obj2 = json.loads(candidate2)
+            if not isinstance(obj2, dict):
+                raise json.JSONDecodeError("Top-level JSON is not an object", candidate2, 0)
+            return cast(dict[str, Any], obj2)
 
-        # Final attempt: remove any lone fences that didn't match above
+        # Final attempt: strip dangling fences and parse whole string
         s2 = re.sub(r"^```.*?$|```$", "", s, flags=re.MULTILINE).strip()
-        obj = json.loads(s2)
-        if not isinstance(obj, dict):
+        obj3 = json.loads(s2)
+        if not isinstance(obj3, dict):
             raise json.JSONDecodeError("Top-level JSON is not an object", s2, 0)
-        return cast(dict[str, Any], obj)
+        return cast(dict[str, Any], obj3)
 
     # -------- Extracted loop body helper --------
     def _handle_conversation_event(
