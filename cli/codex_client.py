@@ -197,10 +197,29 @@ class CodexClient:
         last = s.rfind("}")
         if first != -1 and last != -1 and last > first:
             candidate2 = s[first : last + 1]
-            obj2 = json.loads(candidate2)
-            if not isinstance(obj2, dict):
-                raise json.JSONDecodeError("Top-level JSON is not an object", candidate2, 0)
-            return cast(dict[str, Any], obj2)
+            try:
+                obj2 = json.loads(candidate2)
+            except json.JSONDecodeError:
+                obj2 = None
+            if isinstance(obj2, dict):
+                return cast(dict[str, Any], obj2)
+
+        # Attempt to decode the first JSON object even when extra data follows (e.g., duplicate payloads)
+        decoder = json.JSONDecoder()
+        stripped = s.lstrip()
+        try:
+            obj3, _ = decoder.raw_decode(stripped)
+            if isinstance(obj3, dict):
+                return cast(dict[str, Any], obj3)
+        except json.JSONDecodeError:
+            brace_idx = stripped.find("{")
+            if brace_idx > 0:
+                try:
+                    obj4, _ = decoder.raw_decode(stripped[brace_idx:])
+                    if isinstance(obj4, dict):
+                        return cast(dict[str, Any], obj4)
+                except json.JSONDecodeError:
+                    pass
 
         # Final attempt: strip dangling fences and parse whole string
         s2 = re.sub(r"^```.*?$|```$", "", s, flags=re.MULTILINE).strip()

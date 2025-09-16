@@ -108,16 +108,36 @@ class ReviewProcessor:
         self._debug(2, f"Prompt length: {len(prompt)} chars")
         print("Running Codex to generate review findings...", flush=True)
 
-        # Execute Codex
-        output = self.codex_client.execute(prompt)
+        # Execute Codex with limited retries if JSON parsing fails
+        max_attempts = 3  # initial try + up to two retries
+        last_error: json.JSONDecodeError | None = None
+        result: dict[str, Any] | None = None
 
-        # Parse JSON response (robust to fenced or prefixed/suffixed text)
-        try:
-            result = self.codex_client.parse_json_response(output)
-        except json.JSONDecodeError as e:
-            print("Model did not return valid JSON:")
-            print(output)
-            raise CodexExecutionError(f"JSON parsing error: {e}") from e
+        for attempt in range(1, max_attempts + 1):
+            if attempt > 1:
+                self._debug(
+                    1,
+                    f"Retrying Codex due to invalid JSON (attempt {attempt}/{max_attempts})",
+                )
+
+            # Execute Codex
+            output = self.codex_client.execute(prompt)
+
+            # Parse JSON response (robust to fenced or prefixed/suffixed text)
+            try:
+                result = self.codex_client.parse_json_response(output)
+                break
+            except json.JSONDecodeError as e:
+                last_error = e
+                if attempt == max_attempts:
+                    print("Model did not return valid JSON:")
+                    print(output)
+                continue
+
+        if result is None:
+            raise CodexExecutionError(
+                f"JSON parsing error after {max_attempts} attempts: {last_error}"
+            ) from last_error
 
         # Process and post results
         self._post_results(result, changed_files, repo, pr, head_sha, rename_map)
