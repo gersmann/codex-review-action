@@ -21,3 +21,6 @@ dist/
 build/
 
 /.codex-context/
+# Local secrets
+.env
+*.env
