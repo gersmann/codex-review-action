@@ -49,6 +49,12 @@ class CodexClient:
     def _emit_debug_event(self, msg_type: str | None, msg: dict[str, Any] | None) -> None:
         if self.config.debug_level < 1:
             return
+        event_type = msg_type or ""
+        if isinstance(msg, dict):
+            event_type = str(msg.get("type") or event_type)
+        event_type_lower = event_type.lower()
+        if "exec_command" in event_type_lower and "delta" in event_type_lower:
+            return
         if not isinstance(msg, dict):
             self._debug(1, f"[codex-event] {msg_type}: {msg}")
             return
@@ -105,6 +111,8 @@ class CodexClient:
         overrides = CodexConfig.model_validate(cast(Mapping[str, Any], base_config))
 
         last_msg: str | None = None
+        last_agent_message: str | None = None
+        last_task_message: str | None = None
         buf_parts: list[str] = []
         stream_enabled = self._should_stream(suppress_stream)
         # Track whether we've printed any content to decide on newlines cleanly.
@@ -134,6 +142,12 @@ class CodexClient:
                 val = result.get("last_msg")
                 if isinstance(val, str) or val is None:
                     last_msg = val
+                agent_msg = result.get("agent_message")
+                if isinstance(agent_msg, str):
+                    last_agent_message = agent_msg
+                task_msg = result.get("task_message")
+                if isinstance(task_msg, str):
+                    last_task_message = task_msg
                 if result.get("printed"):
                     printed_any = True
                 if result.get("task_complete") and stream_enabled and printed_any:
@@ -141,6 +155,12 @@ class CodexClient:
 
         except Exception as e:
             raise CodexExecutionError(f"Codex execution failed: {e}") from e
+
+        if last_agent_message:
+            return last_agent_message
+
+        if last_task_message:
+            return last_task_message
 
         if last_msg:
             return last_msg
@@ -235,12 +255,20 @@ class CodexClient:
         """Handle a single conversation event and return state deltas.
 
         Returns a dict with optional keys:
-        - "last_msg": str | None — last full agent message seen
+        - "last_msg": str | None — last agent- or task-complete message seen
+        - "agent_message": str | None — last EventMsgAgentMessage payload
+        - "task_message": str | None — task-complete last_agent_message payload
         - "printed": bool — whether anything was printed to stdout
         - "task_complete": bool — whether a task-complete event occurred
         May raise CodexExecutionError on error events.
         """
-        state: dict[str, Any] = {"last_msg": None, "printed": False, "task_complete": False}
+        state: dict[str, Any] = {
+            "last_msg": None,
+            "agent_message": None,
+            "task_message": None,
+            "printed": False,
+            "task_complete": False,
+        }
 
         if not isinstance(event, Event):
             return state
@@ -261,6 +289,7 @@ class CodexClient:
 
         if isinstance(inner, EventMsgAgentMessage):
             state["last_msg"] = inner.message
+            state["agent_message"] = inner.message
             buf_parts.append(inner.message)
             if stream_enabled:
                 print(inner.message, end="", flush=True)
@@ -277,6 +306,7 @@ class CodexClient:
         if isinstance(inner, EventMsgTaskComplete):
             if inner.last_agent_message:
                 state["last_msg"] = inner.last_agent_message
+                state["task_message"] = inner.last_agent_message
             state["task_complete"] = True
             return state
 

@@ -231,8 +231,43 @@ class EditProcessor:
         subprocess.run(["git", "commit", "-m", message], check=True)
 
     def _git_push_head_to_branch(self, branch: str) -> None:
-        # Push current HEAD to the target branch name on origin (works in detached HEAD)
-        subprocess.run(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], check=True)
+        """Push HEAD to the target branch, retrying after a rebase if needed."""
+
+        push_cmd = ["git", "push", "origin", f"HEAD:refs/heads/{branch}"]
+        result = subprocess.run(push_cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            return
+
+        self._debug(1, f"Push rejected for {branch}; attempting fetch/rebase.")
+
+        fetch = subprocess.run(["git", "fetch", "origin", branch], capture_output=True, text=True)
+        if fetch.returncode != 0:
+            raise subprocess.CalledProcessError(
+                fetch.returncode,
+                fetch.args,
+                fetch.stdout,
+                fetch.stderr or result.stderr,
+            )
+
+        rebase_target = f"origin/{branch}"
+        rebase = subprocess.run(["git", "rebase", rebase_target], capture_output=True, text=True)
+        if rebase.returncode != 0:
+            subprocess.run(["git", "rebase", "--abort"], check=False)
+            raise subprocess.CalledProcessError(
+                rebase.returncode,
+                rebase.args,
+                rebase.stdout,
+                rebase.stderr,
+            )
+
+        final_push = subprocess.run(push_cmd, capture_output=True, text=True)
+        if final_push.returncode != 0:
+            raise subprocess.CalledProcessError(
+                final_push.returncode,
+                final_push.args,
+                final_push.stdout,
+                final_push.stderr,
+            )
 
     def _git_head_is_ahead(self, branch: str | None) -> bool:
         """Return True if HEAD has commits not present on the remote branch.
