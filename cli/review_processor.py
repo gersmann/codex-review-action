@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -197,17 +196,17 @@ class ReviewProcessor:
         )
         summary = "\n".join(summary_lines)
 
-        # Replace previous summary with a fresh issue comment
+        # Replace previous summary (issue comment or review) with a fresh PR review body
+        # We keep the deletion/dismissal logic but now post the summary as the PR review body
         try:
             if self.config.dry_run:
                 self._debug(
-                    1, "DRY_RUN: would delete prior summary (if any) and create a fresh one"
+                    1, "DRY_RUN: would delete/dismiss prior Codex summaries before posting review"
                 )
             else:
                 self._delete_prior_summary(pr)
-                pr.as_issue().create_comment(summary)
         except GithubException as e:
-            print(f"Failed to update summary comment: {e}", file=sys.stderr)
+            print(f"Failed to clean up prior summary: {e}", file=sys.stderr)
 
         # Build anchor maps for inline comments (deterministic)
         file_maps = build_anchor_maps(changed_files)
@@ -231,8 +230,8 @@ class ReviewProcessor:
         except Exception as e:
             self._debug(1, f"Failed writing anchor_maps.json: {e}")
 
-        # Post findings using single-comment API only (no batch, no file-level fallback)
-        self._post_findings(findings, file_maps, repo, pr, head_sha, rename_map)
+        # Post findings bundled as a single PR review with inline comments
+        self._post_findings(findings, file_maps, repo, pr, head_sha, rename_map, summary)
 
     def _delete_prior_summary(self, pr: PullRequest) -> None:
         """Delete prior Codex summary comments and dismiss prior summary reviews."""
@@ -455,9 +454,12 @@ class ReviewProcessor:
         pr: PullRequest,
         head_sha: str,
         rename_map: dict[str, str],
+        summary: str,
     ) -> None:
-        """Post findings using deterministic anchors via single-comment API only."""
+        """Post findings as a single PR review with deterministic anchors."""
         repo_root = self.config.repo_root or Path(".").resolve()
+
+        review_comments: list[dict[str, Any]] = []
 
         for finding in findings:
             title = str(finding.get("title", "Issue")).strip()
@@ -499,31 +501,46 @@ class ReviewProcessor:
 
             comment_body = f"{title}\n\n{final_body}" if final_body else title
 
-            if self.config.dry_run:
-                if anchor["kind"] == "range":
-                    self._debug(
-                        1,
-                        f"DRY_RUN: would post RANGE {rel_path}:{anchor['start_line']}-{anchor['end_line']}",
-                    )
-                else:
-                    self._debug(1, f"DRY_RUN: would post SINGLE {rel_path}:{anchor['line']}")
-                continue
-
-            url = f"{pr.url}/comments"
+            # Build review comment payload (use line/side; ranges add start_line/start_side)
             payload: dict[str, Any] = {
                 "body": comment_body,
-                "commit_id": head_sha,
                 "path": rel_path,
                 "side": "RIGHT",
             }
             if anchor["kind"] == "range":
                 payload["start_line"] = int(anchor["start_line"])
+                payload["start_side"] = "RIGHT"
                 payload["line"] = int(anchor["end_line"])
             else:
                 payload["line"] = int(anchor["line"])
 
+            review_comments.append(payload)
+
+        # Submit as a single PR review (COMMENT event) to reduce notifications
+        if self.config.dry_run:
+            self._debug(
+                1,
+                f"DRY_RUN: would create PR review with {len(review_comments)} inline comments",
+            )
+            return
+
+        try:
+            url = f"{pr.url}/reviews"
+            review_payload: dict[str, Any] = {
+                "event": "COMMENT",
+                "body": summary,
+                "commit_id": head_sha,
+                "comments": review_comments,
+            }
+            pr._requester.requestJsonAndCheck("POST", url, input=review_payload)
+        except Exception as e:
+            self._debug(1, f"Failed to create bundled PR review: {e}")
+            # Fallback: post comments individually to avoid dropping feedback entirely
             try:
-                pr._requester.requestJsonAndCheck("POST", url, input=payload)
-                time.sleep(0.05)
-            except Exception as e:
-                self._debug(1, f"Failed to post comment for {rel_path}: {e}")
+                for payload in review_comments:
+                    single = dict(payload)
+                    single.pop("start_side", None)
+                    single["commit_id"] = head_sha
+                    pr._requester.requestJsonAndCheck("POST", f"{pr.url}/comments", input=single)
+            except Exception as e2:
+                self._debug(1, f"Fallback single-comment posting also failed: {e2}")

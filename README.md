@@ -147,8 +147,8 @@ Inputs
 
 What it posts
 
-- A summary review on the PR with overall verdict and explanation.
-- Inline comments for each finding using the single-comment API with line/side anchoring. Multi-line comments (with suggestions) are only posted when the selected range is contiguous in the same hunk and ≤ 5 lines. Otherwise a precise single-line comment is posted and any suggestion is rendered as a non-applicable diff block.
+- A single PR review that includes a top-level summary and bundled inline comments to minimize notifications.
+- Inline comments are added within that review using line/side anchoring. Multi-line comments (with suggestions) are only posted when the selected range is contiguous in the same hunk and ≤ 5 lines. Otherwise a precise single-line comment is posted and any suggestion is rendered as a non-applicable diff block.
 - When a requested line is not present in the diff, the finding is skipped (no file-level fallbacks).
 
 Troubleshooting
