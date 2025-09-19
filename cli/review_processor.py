@@ -157,7 +157,6 @@ class ReviewProcessor:
         total_findings = len(findings)
         overall = str(result.get("overall_correctness", "")).strip() or "patch is correct"
         overall_explanation = str(result.get("overall_explanation", "")).strip()
-        overall_conf = result.get("overall_confidence_score")
 
         # If this PR already has a Codex review, deduplicate new findings
         try:
@@ -187,8 +186,6 @@ class ReviewProcessor:
         if overall_explanation:
             summary_lines.append("")
             summary_lines.append(overall_explanation)
-        if isinstance(overall_conf, (int, float)):
-            summary_lines.append(f"Confidence: {overall_conf}")
         # Close with a quick hint for using ACT mode to address findings
         summary_lines.append("")
         summary_lines.append(
