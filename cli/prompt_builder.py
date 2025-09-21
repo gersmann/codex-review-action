@@ -112,11 +112,14 @@ class PromptBuilder:
         )
         include_annotated = include_annotated and (total_patch_lines <= 4000)
 
+        extra = (self.config.additional_prompt or "").strip()
+
         prompt = (
             f"{intro}\n\n"
             "Review guidelines (verbatim):\n"
             f"{guidelines}\n\n"
-            f"{line_rules}\n"
+            + (("Additional reviewer instructions (verbatim):\n" + extra + "\n\n") if extra else "")
+            + f"{line_rules}\n"
             f"{context}\n"
             "Changed files and patches:\n"
             f"{diff_blob}\n\n"

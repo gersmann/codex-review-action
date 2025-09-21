@@ -124,6 +124,10 @@ lines = parse_valid_head_lines_from_patch(patch_content)
   - `--fast-model`, `--fast-reasoning-effort`
   - `CODEX_FAST_MODEL`, `CODEX_FAST_REASONING_EFFORT`
 
+### Customizing the Review Prompt
+
+- Provide extra reviewer guidance using env `CODEX_ADDITIONAL_PROMPT` (verbatim text). When set, it is appended after the built-in guidelines and before the line-selection rules.
+
 ## Benefits
 
 1. **Maintainable**: Clear separation of concerns makes code easier to maintain
