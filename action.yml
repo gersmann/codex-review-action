@@ -45,6 +45,10 @@ inputs:
     description: "Additional instructions for act mode (autonomous editing)"
     required: false
     default: ""
+  additional_prompt:
+    description: "Extra reviewer instructions appended to the review prompt (verbatim)"
+    required: false
+    default: ""
   codex_python_version:
     description: "Version spec for codex-python on PyPI (e.g., '>=0.2.3')"
     required: false
@@ -81,6 +85,7 @@ runs:
         CODEX_FAST_MODEL: ${{ inputs.fast_model }}
         CODEX_FAST_REASONING_EFFORT: ${{ inputs.fast_reasoning_effort }}
         CODEX_ACT_INSTRUCTIONS: ${{ inputs.act_instructions }}
+        CODEX_ADDITIONAL_PROMPT: ${{ inputs.additional_prompt }}
         DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
         DRY_RUN: ${{ inputs.dry_run }}
         STREAM_AGENT_MESSAGES: ${{ inputs.stream_agent_messages }}

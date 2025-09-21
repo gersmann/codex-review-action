@@ -36,6 +36,7 @@ class ReviewConfig:
     stream_output: bool = True
     dry_run: bool = False
     include_annotated_in_prompt: bool = False
+    additional_prompt: str = ""
 
     # Repository paths
     repo_root: Path | None = None
@@ -73,6 +74,7 @@ class ReviewConfig:
 
         # Act mode configuration
         act_instructions = os.environ.get("CODEX_ACT_INSTRUCTIONS", "").strip()
+        additional_prompt = os.environ.get("CODEX_ADDITIONAL_PROMPT", "").strip()
 
         # Validate model authentication
         if model_provider == "openai":
@@ -107,6 +109,7 @@ class ReviewConfig:
             stream_output=stream_output,
             dry_run=dry_run,
             include_annotated_in_prompt=include_annotated_in_prompt,
+            additional_prompt=additional_prompt,
             repo_root=repo_root,
         )
 

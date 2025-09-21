@@ -1,0 +1,60 @@
+name: Release Published
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  retag:
+    name: Point v1/latest to published release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update v1 and latest tags
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tagName = context.payload.release.tag_name;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const match = /^v(\d+)(?:[.-].*)?$/.exec(tagName || '');
+            if (!match) {
+              core.info(`Release tag ${tagName} is not semver-like (vN[.x]). Skipping.`);
+              return;
+            }
+            const major = parseInt(match[1], 10);
+            if (major !== 1) {
+              core.info(`Major version ${major} != 1; skipping retag of v1/latest.`);
+              return;
+            }
+
+            // Resolve the commit SHA that the release tag points to
+            const ref = await github.rest.git.getRef({ owner, repo, ref: `tags/${tagName}` });
+            let targetSha = ref.data.object.sha;
+            if (ref.data.object.type === 'tag') {
+              const tagObj = await github.rest.git.getTag({ owner, repo, tag_sha: targetSha });
+              targetSha = tagObj.data.object.sha; // commit SHA
+            }
+
+            async function upsertTag(tag) {
+              const shortRef = `tags/${tag}`;
+              const fullRef = `refs/${shortRef}`;
+              try {
+                await github.rest.git.updateRef({ owner, repo, ref: shortRef, sha: targetSha, force: true });
+                core.info(`Updated ${fullRef} -> ${targetSha}`);
+              } catch (err) {
+                if (err.status === 422) {
+                  await github.rest.git.createRef({ owner, repo, ref: fullRef, sha: targetSha });
+                  core.info(`Created ${fullRef} -> ${targetSha}`);
+                } else {
+                  core.setFailed(`Failed to upsert ${fullRef}: ${err.message}`);
+                }
+              }
+            }
+
+            await upsertTag('v1');
+            await upsertTag('latest');
+
