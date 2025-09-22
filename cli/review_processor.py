@@ -193,17 +193,17 @@ class ReviewProcessor:
         )
         summary = "\n".join(summary_lines)
 
-        # Replace previous summary (issue comment or review) with a fresh PR review body
-        # We keep the deletion/dismissal logic but now post the summary as the PR review body
+        # Clean up legacy issue-level summaries only here; review cleanup is decided later
         try:
             if self.config.dry_run:
                 self._debug(
-                    1, "DRY_RUN: would delete/dismiss prior Codex summaries before posting review"
+                    1, "DRY_RUN: would delete prior Codex issue comments before posting review"
                 )
             else:
-                self._delete_prior_summary(pr)
+                # Delete only issue comments here. We may update or dismiss prior reviews later.
+                self._delete_prior_summary(pr, dismiss_reviews=False)
         except GithubException as e:
-            print(f"Failed to clean up prior summary: {e}", file=sys.stderr)
+            print(f"Failed to clean up prior issue summary: {e}", file=sys.stderr)
 
         # Build anchor maps for inline comments (deterministic)
         file_maps = build_anchor_maps(changed_files)
@@ -230,8 +230,14 @@ class ReviewProcessor:
         # Post findings bundled as a single PR review with inline comments
         self._post_findings(findings, file_maps, repo, pr, head_sha, rename_map, summary)
 
-    def _delete_prior_summary(self, pr: PullRequest) -> None:
-        """Delete prior Codex summary comments and dismiss prior summary reviews."""
+    def _delete_prior_summary(self, pr: PullRequest, dismiss_reviews: bool = True) -> None:
+        """Delete prior Codex summary issue comments.
+
+        Note: We intentionally do not attempt to mutate or dismiss prior PR
+        reviews here. GitHub does not support editing a submitted review body
+        and dismissals do not remove comment-only reviews. Our posting logic
+        avoids creating summary-only reviews entirely to prevent duplication.
+        """
         marker = "Codex Autonomous Review:"
         # Issue comments
         try:
@@ -249,25 +255,6 @@ class ReviewProcessor:
                         )
         except Exception as e:
             self._debug(1, f"Listing issue comments failed: {e}")
-
-        # PR reviews (dismiss)
-        try:
-            requester = getattr(pr, "_requester", None)
-            pr_url = getattr(pr, "url", "")
-            for r in pr.get_reviews():
-                body = (getattr(r, "body", "") or "").strip()
-                if marker in body:
-                    review_id = getattr(r, "id", None)
-                    if requester and pr_url and review_id:
-                        url = f"{pr_url}/reviews/{review_id}/dismissals"
-                        payload = {"message": "Superseded by latest Codex review."}
-                        try:
-                            requester.requestJsonAndCheck("PUT", url, input=payload)
-                            self._debug(1, f"Dismissed prior PR review id={review_id}")
-                        except Exception as e:
-                            self._debug(1, f"Failed to dismiss review id={review_id}: {e}")
-        except Exception as e:
-            self._debug(1, f"Listing/dismissing reviews failed: {e}")
 
     def _has_prior_codex_review(self, pr: PullRequest) -> bool:
         try:
@@ -512,6 +499,14 @@ class ReviewProcessor:
                 payload["line"] = int(anchor["line"])
 
             review_comments.append(payload)
+
+        # If there are no inline comments after dedup, skip creating a review to avoid duplicates.
+        if len(review_comments) == 0:
+            if self.config.dry_run:
+                self._debug(
+                    1, "DRY_RUN: would SKIP creating summary-only PR review (no inline comments)"
+                )
+            return
 
         # Submit as a single PR review (COMMENT event) to reduce notifications
         if self.config.dry_run:
