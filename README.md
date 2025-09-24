@@ -148,8 +148,9 @@ How “/codex” Commands Work
 
 ## Release & Versioning
 
-- Pushes to `main` create or update a single draft release with placeholder tag `next` (see `.github/workflows/draft-release.yml`).
-- When you click Publish on that draft, `.github/workflows/release-published.yml` updates the `v1` and `latest` tags to the release commit (only if the major is `v1`).
+- Release Please opens/updates a release PR on pushes to `main` and builds notes from commits (including direct commits).
+- Merge the release PR to create a GitHub release and semver tag (e.g., `v1.2.3`).
+- After publish, `.github/workflows/release-published.yml` updates the `v1` and `latest` tags to the release commit when the major is `v1`.
 
 ## Local Development
 

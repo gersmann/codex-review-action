@@ -38,7 +38,7 @@ jobs:
             // Resolve the commit SHA for whichever tag we end up using
             let targetSha = await resolveCommitSha(originalTag);
 
-            // If the published release is not semver-like (e.g., 'next'), promote it to v1.N
+            // If the published release is not semver-like, promote it to v1.N
             if (!/^v(\d+)(?:[.-].*)?$/.test(originalTag || '')) {
               // Find the highest existing v1.N tag
               let page = 1;
@@ -96,7 +96,7 @@ jobs:
                 return;
               }
 
-              // Try to delete the placeholder tag (e.g., 'next') if it exists
+              // Try to delete the placeholder tag if it exists
               try {
                 await github.rest.git.deleteRef({ owner, repo, ref: `tags/${originalTag}` });
                 core.info(`Deleted refs/tags/${originalTag}`);
