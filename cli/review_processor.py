@@ -500,12 +500,19 @@ class ReviewProcessor:
 
             review_comments.append(payload)
 
-        # If there are no inline comments after dedup, skip creating a review to avoid duplicates.
+        # If there are no inline comments after dedup, post a summary-only
+        # issue comment so reviewers still see the overall outcome.
         if len(review_comments) == 0:
             if self.config.dry_run:
                 self._debug(
-                    1, "DRY_RUN: would SKIP creating summary-only PR review (no inline comments)"
+                    1, "DRY_RUN: would create summary issue comment (0 findings)"
                 )
+                return
+            try:
+                pr.as_issue().create_comment(summary)
+                self._debug(1, "Posted summary-only issue comment (0 findings)")
+            except Exception as e:
+                self._debug(1, f"Failed to post summary-only issue comment: {e}")
             return
 
         # Submit as a single PR review (COMMENT event) to reduce notifications

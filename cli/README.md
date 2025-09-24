@@ -69,6 +69,10 @@ python -m cli.main --repo owner/repo --pr 123 --debug 2
 
 When used via the composite action, the CLI runs in GitHub Actions mode automatically and reads the event payload to determine whether to run a full review or a comment-triggered edit.
 
+Review posting behavior:
+- If findings exist, Codex posts a single PR review containing a summary and inline comments.
+- If there are zero findings, Codex posts a PR-level issue comment with the summary so reviewers still see the outcome.
+
 Comment-triggered edits
 
 - Add a comment on the PR that starts with:

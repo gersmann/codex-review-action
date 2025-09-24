@@ -2,7 +2,7 @@
 
 Run Codex to review pull requests and, on demand, make autonomous edits driven by “/codex …” comments.
 
-- Review: posts one PR review with a summary plus precise inline comments.
+- Review: posts one PR review with a summary plus precise inline comments; when there are no findings, it posts a summary issue comment instead.
 - Act: applies focused edits when trusted users comment /codex; can run tests and services before pushing.
 
 ## Quick Start (Review)
