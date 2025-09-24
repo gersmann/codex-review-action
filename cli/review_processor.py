@@ -504,9 +504,7 @@ class ReviewProcessor:
         # issue comment so reviewers still see the overall outcome.
         if len(review_comments) == 0:
             if self.config.dry_run:
-                self._debug(
-                    1, "DRY_RUN: would create summary issue comment (0 findings)"
-                )
+                self._debug(1, "DRY_RUN: would create summary issue comment (0 findings)")
                 return
             try:
                 pr.as_issue().create_comment(summary)
