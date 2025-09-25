@@ -57,7 +57,7 @@ class ReviewProcessor:
 
         head = pr.head
         base = pr.base
-        pr_data = {
+        pr_data: dict[str, Any] = {
             "number": pr.number,
             "state": pr.state,
             "title": pr.title or "",
