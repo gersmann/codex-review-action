@@ -52,7 +52,7 @@ inputs:
   codex_python_version:
     description: "Version spec for codex-python on PyPI (e.g., '>=0.2.3')"
     required: false
-    default: ""
+    default: "==0.2.16"
   extra_pip_args:
     description: "Additional pip arguments (e.g., --index-url)"
     required: false
@@ -70,6 +70,10 @@ runs:
       run: |
         set -euo pipefail
         python3 -m pip install --upgrade pip
+        if [ -n "${{ inputs.codex_python_version }}" ]; then
+          # Pin codex-python first; requirements.txt lists it unpinned
+          python3 -m pip install ${{ inputs.extra_pip_args }} "codex-python${{ inputs.codex_python_version }}"
+        fi
         python3 -m pip install ${{ inputs.extra_pip_args }} -r "${{ github.action_path }}/requirements.txt"
 
     - name: Run Codex autonomous review (CLI)
