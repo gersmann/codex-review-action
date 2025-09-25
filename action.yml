@@ -50,9 +50,9 @@ inputs:
     required: false
     default: ""
   codex_python_version:
-    description: "Version spec for codex-python on PyPI (e.g., '>=0.2.3')"
+    description: "Version spec for codex-python on PyPI (e.g., '>=0.3.0')"
     required: false
-    default: "==0.2.16"
+    default: "==0.3.0"
   extra_pip_args:
     description: "Additional pip arguments (e.g., --index-url)"
     required: false

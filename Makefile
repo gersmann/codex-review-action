@@ -10,13 +10,13 @@ help:
 	@echo "  qa    - Run fmt, lint, and type"
 
 fmt:
-	uvx ruff format $(PY_SRC)
+	uv run ruff format $(PY_SRC)
 
 lint:
-	uvx ruff check --fix $(PY_SRC)
+	uv run ruff check --fix $(PY_SRC)
 
 type:
-	uvx mypy $(PY_SRC)
+	uv run mypy $(PY_SRC)
 
 qa: fmt lint type
 

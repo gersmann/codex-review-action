@@ -119,12 +119,11 @@ class CodexClient:
         printed_any = False
         parse_errors_seen = False
 
+        conversation = None
         try:
             client = CoreCodexClient(load_default_config=False, config=overrides)
-            conversation = client.start_conversation(
-                prompt,
-                load_default_config=False,
-            )
+            conversation = client.start_conversation(load_default_config=False)
+            conversation.submit_user_turn(prompt)
 
             # Iterate defensively: tolerate parser/validation errors from SDK.
             it = iter(conversation)
@@ -150,11 +149,19 @@ class CodexClient:
                     last_task_message = task_msg
                 if result.get("printed"):
                     printed_any = True
-                if result.get("task_complete") and stream_enabled and printed_any:
-                    print("", file=sys.stdout, flush=True)
+                if result.get("task_complete"):
+                    if stream_enabled and printed_any:
+                        print("", file=sys.stdout, flush=True)
+                    break
 
         except Exception as e:
             raise CodexExecutionError(f"Codex execution failed: {e}") from e
+        finally:
+            try:
+                if conversation is not None:
+                    conversation.shutdown()
+            except Exception:
+                pass
 
         if last_agent_message:
             return last_agent_message
