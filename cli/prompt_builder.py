@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+
+from github.File import File
+from github.PullRequest import PullRequest
 
 from .config import ReviewConfig
 from .exceptions import PromptError
-from .patch_parser import annotate_patch_with_line_numbers
 
 
 class PromptBuilder:
@@ -39,100 +41,85 @@ class PromptBuilder:
 
     def compose_prompt(
         self,
-        guidelines: str,
-        changed_files: list,
-        pr_data: dict[str, Any],
+        changed_files: Sequence[File],
+        pr: PullRequest,
     ) -> str:
         """Compose the complete review prompt."""
         repo_root = self.config.repo_root or Path(".").resolve()
         context_dir = repo_root / self.config.context_dir_name
 
-        pr_title = pr_data.get("title") or ""
-        head_label = pr_data.get("head", {}).get("label", "")
-        base_label = pr_data.get("base", {}).get("label", "")
-        head_sha = pr_data.get("head", {}).get("sha", "")
-        base_sha = pr_data.get("base", {}).get("sha", "")
-
-        intro = (
-            "You are an autonomous code review assistant.\n"
-            "Output exactly the JSON as specified. Do not add fences or extra text.\n"
-        )
-
         context = (
-            f"PR Title: {pr_title}\n"
-            f"From: {head_label} ({head_sha}) -> To: {base_label} ({base_sha})\n\n"
-            "Important paths:\n"
-            f"- Repo root (absolute): {repo_root}\n"
-            f"- Local context dir: {context_dir} (contains combined_diffs.txt, pr.md, and per-file patches in diffs/)\n"
-            "When returning code_location.absolute_file_path, use the absolute path under this root.\n"
-            "Line ranges must overlap with the provided diff hunks.\n"
-        )
-
-        # Build diff content
-        diffs: list[str] = []
-        annotated_diffs: list[str] = []
-        total_patch_lines = 0
-        for file in changed_files:
-            if not file.patch:
-                continue
-            diffs.append(
-                f"File: {file.filename}\n"
-                f"Status: {file.status}\n"
-                f"Patch (unified diff):\n---\n{file.patch}\n"
-            )
-            total_patch_lines += len(file.patch.splitlines())
-            # Build annotated patch with explicit BASE/HEAD numbering for optional inclusion
-            try:
-                annotated = annotate_patch_with_line_numbers(file.patch)
-                annotated_diffs.append(
-                    f"File: {file.filename}\nAnnotated patch (BASE, HEAD, TAG, CONTENT):\n---\n{annotated}\n"
-                )
-            except Exception:
-                pass
-
-        diff_blob = (
-            ("\n" + ("\n" + ("-" * 80) + "\n").join(diffs))
-            if diffs
-            else "\n(no diff patch content available)\n"
+            "<pull_request>\n"
+            f"<title>{pr.title}</title>\n"
+            f'<head label="{pr.head.label}" sha="{pr.head.sha}" ref="{pr.head.ref}"/>\n'
+            f'<base label="{pr.base.label}" sha="{pr.base.sha}" ref="{pr.base.ref}"/>\n'
+            "</pull_request>\n"
+            "<paths>\n"
+            f"<repo_root>{repo_root}</repo_root>\n"
+            f"<context_dir>{context_dir}</context_dir>\n"
+            "</paths>\n"
         )
 
         # Tighten line-selection guidance
         line_rules = (
-            "Line selection rules:\n"
+            "<line_rules>\n"
             "- Always use HEAD (right side) line numbers for code_location.\n"
             "- Prefer the exact added line(s) that contain the problematic code/text, not surrounding blanks.\n"
             "- Never select a trailing blank line. If your intended target is a blank line, shift to the nearest non-blank line (prefer earlier).\n"
             "- Keep ranges minimal; for single-line issues, set start=end to the single non-blank line.\n"
             "- Your line_range must overlap a visible + or context line in the diff hunk.\n"
             "- When you quote text in the body, align code_location.start to the line that contains that quote.\n"
+            "</line_rules>\n"
         )
 
-        include_annotated = self.config.include_annotated_in_prompt or (
-            self.config.debug_level >= 2
-        )
-        include_annotated = include_annotated and (total_patch_lines <= 4000)
+        # Provide lightweight change summary
+        changed_list: list[str] = []
+        for file in changed_files:
+            filename = file.filename
+            if not filename:
+                continue
+            status = file.status
+            changed_list.append(f"- {filename} ({status})")
 
-        extra = (self.config.additional_prompt or "").strip()
+        changed_summary = (
+            "<changed_files>\n" + "\n".join(changed_list) + "\n</changed_files>\n"
+            if changed_list
+            else "<changed_files>(none)</changed_files>\n"
+        )
+
+        # Relative paths to context artifacts for the agent to inspect directly
+        try:
+            context_dir_rel = context_dir.relative_to(repo_root)
+        except ValueError:
+            context_dir_rel = Path(self.config.context_dir_name)
+
+        pr_metadata_rel = context_dir_rel / "pr.md"
+        review_comments_rel = context_dir_rel / "review_comments.md"
+
+        context_artifacts = (
+            "<context_artifacts>\n"
+            f"<pr_metadata>{pr_metadata_rel}</pr_metadata>\n"
+            f"<review_comments>{review_comments_rel}</review_comments>\n"
+            "</context_artifacts>\n"
+        )
+
+        base_ref = pr.base.ref or pr.base.label.split(":", 1)[-1]
+        review_instructions = (
+            "<git_review_instructions>\n"
+            "To view the exact changes to be merged, run:\n"
+            f"  git diff origin/{base_ref}...HEAD\n"
+            "(Triple dots compute the merge base automatically.)\n"
+            "Consult {review_comments_rel} for context and provide prioritized, actionable findings.\n"
+            "</git_review_instructions>\n"
+        ).format(review_comments_rel=review_comments_rel)
 
         prompt = (
-            f"{intro}\n\n"
-            "Review guidelines (verbatim):\n"
-            f"{guidelines}\n\n"
-            + (("Additional reviewer instructions (verbatim):\n" + extra + "\n\n") if extra else "")
-            + f"{line_rules}\n"
-            f"{context}\n"
-            "Changed files and patches:\n"
-            f"{diff_blob}\n\n"
-            + (
-                (
-                    "Annotated patches with explicit HEAD line numbers:\n"
-                    + ("\n" + ("\n" + ("-" * 80) + "\n").join(annotated_diffs))
-                    + "\n\n"
-                )
-                if (include_annotated and annotated_diffs)
-                else ""
-            )
-            + "Respond now with the JSON schema output only."
+            f"{context}"
+            f"{context_artifacts}"
+            f"{changed_summary}"
+            f"{review_instructions}"
+            f"{line_rules}"
+            "<response_format>Respond now with the JSON schema output only.</response_format>"
         )
 
         return prompt

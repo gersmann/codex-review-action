@@ -2,7 +2,7 @@
 
 Run Codex to review pull requests and, on demand, make autonomous edits driven by “/codex …” comments.
 
-- Review: posts one PR review with a summary plus precise inline comments; when there are no findings, it posts a summary issue comment instead.
+- Review: posts precise inline review comments and a PR-level timeline summary as an issue comment. When there are no findings, only the timeline summary is posted.
 - Act: applies focused edits when trusted users comment /codex; can run tests and services before pushing.
 
 ## Quick Start (Review)
@@ -106,6 +106,7 @@ jobs:
 
 How “/codex” Commands Work
 - `/codex <instructions>`: propose and apply minimal diffs in-scope.
+- `/codex address comments` (or natural variants like “please fix the review comments”): address unresolved review threads using the full thread conversation as context. Only unresolved threads are considered; resolved threads are ignored. Edits are restricted to files referenced by those threads unless strictly necessary.
 - `/codex focus <path>`: limit scope to a path.
 - `/codex redo`: re-run on latest PR head.
 
@@ -122,13 +123,12 @@ How “/codex” Commands Work
 - dry_run (act only): '0' | '1' (default: '0')
 - act_instructions (act): extra guidance appended to edit prompt
 - additional_prompt (review): extra reviewer instructions (verbatim)
-- include_annotated: true|false (default: true) — include annotated diffs with HEAD line numbers
 - extra_pip_args: additional pip flags (e.g., private index)
 
 ## What It Posts
 
-- One aggregated PR review with inline comments to reduce noise.
-- Comments anchor to exact diff lines; if a line isn’t in the current diff, it’s skipped.
+- Inline review comments anchored to exact diff lines; if a line isn’t in the current diff, it’s skipped.
+- A PR-level timeline summary as an issue comment on each run (or only the summary when there are zero inline findings).
 - Multi‑line suggestions only when contiguous and short; otherwise a precise single‑line comment.
 
 ## Security & Permissions
@@ -138,7 +138,7 @@ How “/codex” Commands Work
   - Run Act only on branches in the main repo, or
   - Use a PAT with fork access (weigh risk), or
   - Bot opens a new branch/PR in base repo (not currently implemented).
-- Grant only what’s needed: contents: write (push), pull-requests: write (reviews), issues: write (optional for issue comments).
+- Grant only what’s needed: contents: write (push), pull-requests: write (reviews), issues: write (required for timeline summary and ACT replies).
 
 ## Troubleshooting
 
@@ -157,5 +157,5 @@ How “/codex” Commands Work
 This action is a Python CLI, not a library.
 
 - uv workflow: `uv sync`
-- QA: `make fmt`, `make lint`, `make type`, `make qa`
+- QA: `make lint` (formats, lints with autofix, and type-checks)
 - Local run: `GITHUB_TOKEN=… OPENAI_API_KEY=… PYTHONPATH=. python -m cli.main --repo owner/repo --pr 123 --mode review`

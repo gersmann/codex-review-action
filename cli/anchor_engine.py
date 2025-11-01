@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
+from github.File import File
+
 from .patch_parser import ParsedPatch, parse_patch
 
 
-def build_anchor_maps(changed_files: list) -> dict[str, ParsedPatch]:
+def build_anchor_maps(changed_files: Iterable[File]) -> dict[str, ParsedPatch]:
     """Build anchor maps for valid lines and positions from changed files."""
     maps: dict[str, ParsedPatch] = {}
     for f in changed_files:
-        patch = getattr(f, "patch", None)
-        filename = getattr(f, "filename", None)
+        patch = f.patch
+        filename = f.filename
         if not patch or not filename:
             continue
 

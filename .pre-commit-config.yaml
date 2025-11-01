@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff-format
+        name: ruff format --check
+        args: ["--check"]
+        pass_filenames: false
+        language_version: python3.12
+      - id: ruff
+        name: ruff check
+        pass_filenames: false
+        language_version: python3.12
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        name: mypy .
+        args: ["--config-file=mypy.ini", "."]
+        pass_filenames: false
+        language_version: python3.12

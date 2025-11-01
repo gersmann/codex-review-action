@@ -9,8 +9,9 @@ on:
     types: [created]
 
 permissions:
-  contents: write           # needed for act mode pushes; safe for review mode
+  contents: write # needed for act mode pushes; safe for review mode
   pull-requests: write
+  issues: write # required for PR-level issue comments (summary, act replies)
 
 concurrency:
   group: codex-review-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
