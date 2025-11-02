@@ -82,11 +82,8 @@ class CodexClient:
         """
         # Resolve model/effort once, up front.
         model = model_name or self.config.model_name
-        effort_str = (reasoning_effort or self.config.reasoning_effort or "").lower() or "medium"
-        try:
-            effort_enum: ReasoningEffort | None = ReasoningEffort(effort_str)
-        except ValueError:
-            effort_enum = None
+        effort_raw = reasoning_effort or self.config.reasoning_effort or "medium"
+        effort_enum = ReasoningEffort(str(effort_raw).strip().lower())
 
         # Build base config
         base_config: dict[str, Any] = {
@@ -284,7 +281,7 @@ class CodexClient:
         msg: Any = event.msg
         inner = getattr(msg, "root", msg)
 
-        if isinstance(inner, (EventMsgAgentMessageDelta, EventMsgAgentReasoningDelta)):
+        if isinstance(inner, EventMsgAgentMessageDelta | EventMsgAgentReasoningDelta):
             self._emit_debug_delta({"delta": getattr(inner, "delta", "")})
         else:
             # Use model_dump() to avoid pydantic repr noise

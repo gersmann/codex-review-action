@@ -5,8 +5,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from codex.config import SandboxMode
 from github import Github
-from github.GithubException import GithubException
+from github.File import File
 from github.IssueComment import IssueComment
 from github.PullRequest import PullRequest
 from github.PullRequestComment import PullRequestComment
@@ -36,6 +37,34 @@ class ReviewProcessor:
         if self.config.debug_level >= level:
             print(f"[debug{level}] {message}", file=sys.stderr)
 
+    def _get_github_client(self) -> Github:
+        """Return a cached Github client, creating it on first use."""
+        if self._gh is None:
+            self._gh = Github(login_or_token=self.config.github_token, per_page=100)
+        return self._gh
+
+    def _build_review_base_instructions(self, guidelines: str) -> str:
+        """Construct base instructions for Codex review runs."""
+
+        parts: list[str] = [
+            "You are an autonomous code review assistant.",
+            "Follow the review guidelines below verbatim while producing prioritized, actionable findings.",
+        ]
+
+        guidelines_text = guidelines.strip()
+        if guidelines_text:
+            parts.append("\nReview guidelines:\n" + guidelines_text)
+
+        extra = (self.config.additional_prompt or "").strip()
+        if extra:
+            parts.append("\nAdditional instructions:\n" + extra)
+
+        parts.append(
+            "Use git commands as needed to inspect the diff between the PR head and the base branch."
+        )
+
+        return "\n".join(parts).strip()
+
     def process_review(self, pr_number: int | None = None) -> dict[str, Any]:
         """Process a code review for the given pull request."""
         if pr_number is None:
@@ -46,63 +75,45 @@ class ReviewProcessor:
         self._debug(1, f"Processing review for {self.config.repository} PR #{pr_number}")
 
         # Initialize PyGithub client and fetch PR
-        gh = self._gh or Github(login_or_token=self.config.github_token, per_page=100)
-        self._gh = gh
-        repo = gh.get_repo(f"{self.config.owner}/{self.config.repo_name}")
+        repo = self._get_github_client().get_repo(f"{self.config.owner}/{self.config.repo_name}")
         pr = repo.get_pull(pr_number)
 
-        # Extract PR data (typed access)
+        # Validate PR object
         if not isinstance(pr, PullRequest):
             raise ValueError("Expected a PullRequest instance")
-
-        head = pr.head
-        base = pr.base
-        pr_data: dict[str, Any] = {
-            "number": pr.number,
-            "state": pr.state,
-            "title": pr.title or "",
-            "head": {"sha": head.sha if head else None, "label": head.label if head else ""},
-            "base": {"sha": base.sha if base else None, "label": base.label if base else ""},
-        }
 
         changed_files = list(pr.get_files())
         # Map old->new paths for renamed files so we can anchor against HEAD paths
         rename_map: dict[str, str] = {}
         for f in changed_files:
-            try:
-                if getattr(f, "status", "") == "renamed":
-                    prev = getattr(f, "previous_filename", None)
-                    if prev:
-                        rename_map[prev] = getattr(f, "filename", prev)
-            except Exception:
-                pass
+            if f.status == "renamed":
+                prev = f.previous_filename
+                if prev:
+                    rename_map[prev] = f.filename
 
-        head_sha = (head.sha if head else None) or pr_data.get("head", {}).get("sha")
+        head_sha = pr.head.sha if pr.head else None
         if not head_sha:
             raise ValueError("Missing head commit SHA")
 
         self._debug(1, f"Changed files: {len(changed_files)}")
-        for file in changed_files[:10]:  # Log first 10 files
-            patch_len = len((file.patch or "").splitlines()) if getattr(file, "patch", None) else 0
+        for cf in changed_files[:10]:  # Log first 10 files
+            # Guard against files where GitHub omits the patch (e.g., binary or large files)
+            patch_len = len(cf.patch.splitlines()) if isinstance(cf.patch, str) else 0
             self._debug(
                 2,
-                f" - {file.filename} status={getattr(file, 'status', 'modified')} patch_len={patch_len}",
+                f" - {cf.filename} status={cf.status} patch_len={patch_len}",
             )
 
         # Prepare local context artifacts (diffs + PR contents with comments)
-        try:
-            repo_root = self.config.repo_root or Path(".").resolve()
-            context_dir_name = self.config.context_dir_name or ".codex-context"
-            self.context_manager.write_context_artifacts(
-                pr, changed_files, repo_root, context_dir_name
-            )
-        except Exception as e:
-            # Non-fatal: continue review even if context writing fails
-            self._debug(1, f"Failed to write context artifacts: {e}")
+        repo_root = self.config.repo_root or Path(".").resolve()
+        context_dir_name = self.config.context_dir_name or ".codex-context"
+        self.context_manager.write_context_artifacts(pr, repo_root, context_dir_name)
 
         # Load guidelines and compose prompt
         guidelines = self.prompt_builder.load_guidelines()
-        prompt = self.prompt_builder.compose_prompt(guidelines, changed_files, pr_data)
+        prompt = self.prompt_builder.compose_prompt(changed_files, pr)
+
+        base_instructions = self._build_review_base_instructions(guidelines)
 
         self._debug(2, f"Prompt length: {len(prompt)} chars")
         print("Running Codex to generate review findings...", flush=True)
@@ -120,7 +131,16 @@ class ReviewProcessor:
                 )
 
             # Execute Codex
-            output = self.codex_client.execute(prompt)
+            output = self.codex_client.execute(
+                prompt,
+                config_overrides={
+                    "base_instructions": base_instructions,
+                    # Skip external sandbox: allow git commands without codex-linux-sandbox
+                    # this is in CI, so no interactions with a real environment in the first place.
+                    # necessary for CI now as long as the linux sandbox is not available.
+                    "sandbox_mode": SandboxMode.DANGER_FULL_ACCESS,
+                },
+            )
 
             # Parse JSON response (robust to fenced or prefixed/suffixed text)
             try:
@@ -138,7 +158,31 @@ class ReviewProcessor:
                 f"JSON parsing error after {max_attempts} attempts: {last_error}"
             ) from last_error
 
-        # Process and post results
+        # Compose and post a fresh timeline summary as an issue comment
+        findings_for_summary = list(result.get("findings", []) or [])
+        summary_lines = [
+            "Codex Autonomous Review:",
+            f"- Overall: {str(result.get('overall_correctness', '') or '').strip() or 'patch is correct'}",
+            f"- Findings (total): {len(findings_for_summary)}",
+        ]
+        overall_explanation = str(result.get("overall_explanation", "")).strip()
+        if overall_explanation:
+            summary_lines.append("")
+            summary_lines.append(overall_explanation)
+        summary_lines.append("")
+        summary_lines.append(
+            'Tip: comment with "/codex address comments" to attempt automated fixes for unresolved review threads.'
+        )
+        summary = "\n".join(summary_lines)
+
+        if not self.config.dry_run:
+            self._delete_prior_summary(pr)
+            # must fail if comment creation fails
+            pr.as_issue().create_comment(summary)
+        else:
+            self._debug(1, "DRY_RUN: would refresh summary issue comment")
+
+        # Process and post inline findings as code comments
         self._post_results(result, changed_files, repo, pr, head_sha, rename_map)
 
         return result
@@ -146,7 +190,7 @@ class ReviewProcessor:
     def _post_results(
         self,
         result: dict[str, Any],
-        changed_files: list[Any],
+        changed_files: list[File],
         repo: Repository | Any,
         pr: PullRequest,
         head_sha: str,
@@ -154,83 +198,45 @@ class ReviewProcessor:
     ) -> None:
         """Post review results to GitHub."""
         findings: list[dict[str, Any]] = list(result.get("findings", []) or [])
-        total_findings = len(findings)
-        overall = str(result.get("overall_correctness", "")).strip() or "patch is correct"
-        overall_explanation = str(result.get("overall_explanation", "")).strip()
+        if self._has_prior_codex_review(pr):
+            # 1) Strict prefilter by file/line proximity to avoid reposting
+            #    even when prior threads are marked resolved.
+            existing_struct = self._collect_existing_review_comments(pr)
+            findings = self._prefilter_duplicates_by_location(findings, existing_struct, rename_map)
 
-        # If this PR already has a Codex review, deduplicate new findings
-        try:
-            if self._has_prior_codex_review(pr):
-                # 1) Strict prefilter by file/line proximity to avoid reposting
-                #    even when prior threads are marked resolved.
-                existing_struct = self._collect_existing_review_comments(pr)
-                findings = self._prefilter_duplicates_by_location(
-                    findings, existing_struct, rename_map
-                )
+            # 2) Semantic dedupe with fast model for remaining near-duplicates
+            existing = self._collect_existing_comment_texts(pr)
+            filtered = self._deduplicate_findings(findings, existing)
+            if isinstance(filtered, list):
+                print(f"Dedup kept {len(filtered)}/{len(findings)} findings (fast model)")
+                findings = filtered
 
-                # 2) Semantic dedupe with fast model for remaining near-duplicates
-                existing = self._collect_existing_comment_texts(pr)
-                filtered = self._deduplicate_findings(findings, existing)
-                if isinstance(filtered, list):
-                    print(f"Dedup kept {len(filtered)}/{len(findings)} findings (fast model)")
-                    findings = filtered
-        except Exception as e:
-            self._debug(1, f"Deduplication step failed: {e}")
-
-        # Compose summary using total (pre-dedup) count
-        summary_lines = [
-            "Codex Autonomous Review:",
-            f"- Overall: {overall}",
-            f"- Findings (total): {total_findings}",
-        ]
-        if overall_explanation:
-            summary_lines.append("")
-            summary_lines.append(overall_explanation)
-        # Close with a quick hint for using ACT mode to address findings
-        summary_lines.append("")
-        summary_lines.append(
-            'Tip: comment with "/codex fix the open comments" to attempt automated fixes.'
-        )
-        summary = "\n".join(summary_lines)
-
-        # Clean up legacy issue-level summaries only here; review cleanup is decided later
-        try:
-            if self.config.dry_run:
-                self._debug(
-                    1, "DRY_RUN: would delete prior Codex issue comments before posting review"
-                )
-            else:
-                # Delete only issue comments here. We may update or dismiss prior reviews later.
-                self._delete_prior_summary(pr, dismiss_reviews=False)
-        except GithubException as e:
-            print(f"Failed to clean up prior issue summary: {e}", file=sys.stderr)
+        # Compute anchors and post inline findings
 
         # Build anchor maps for inline comments (deterministic)
         file_maps = build_anchor_maps(changed_files)
 
         # Persist anchor maps for debugging and line mapping inspection
-        try:
-            repo_root = self.config.repo_root or Path(".").resolve()
-            base_dir = (repo_root / (self.config.context_dir_name or ".codex-context")).resolve()
-            out = {
-                k: {
-                    "valid_head_lines": sorted(list(v.valid_head_lines)),
-                    "added_head_lines": sorted(list(v.added_head_lines)),
-                    "positions_by_head_line": {
-                        str(kk): vv for kk, vv in v.positions_by_head_line.items()
-                    },
-                    "hunks": v.hunks,
-                }
-                for k, v in file_maps.items()
+        repo_root = self.config.repo_root or Path(".").resolve()
+        base_dir = (repo_root / (self.config.context_dir_name or ".codex-context")).resolve()
+        out = {
+            k: {
+                "valid_head_lines": sorted(list(v.valid_head_lines)),
+                "added_head_lines": sorted(list(v.added_head_lines)),
+                "positions_by_head_line": {
+                    str(kk): vv for kk, vv in v.positions_by_head_line.items()
+                },
+                "hunks": v.hunks,
             }
-            (base_dir / "anchor_maps.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
-        except Exception as e:
-            self._debug(1, f"Failed writing anchor_maps.json: {e}")
+            for k, v in file_maps.items()
+        }
+        base_dir.mkdir(parents=True, exist_ok=True)
+        (base_dir / "anchor_maps.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
 
         # Post findings bundled as a single PR review with inline comments
-        self._post_findings(findings, file_maps, repo, pr, head_sha, rename_map, summary)
+        self._post_findings(findings, file_maps, repo, pr, head_sha, rename_map)
 
-    def _delete_prior_summary(self, pr: PullRequest, dismiss_reviews: bool = True) -> None:
+    def _delete_prior_summary(self, pr: PullRequest) -> None:
         """Delete prior Codex summary issue comments.
 
         Note: We intentionally do not attempt to mutate or dismiss prior PR
@@ -240,37 +246,29 @@ class ReviewProcessor:
         """
         marker = "Codex Autonomous Review:"
         # Issue comments
-        try:
-            for c in pr.get_issue_comments():
-                body = (getattr(c, "body", "") or "").strip()
-                if marker in body:
-                    try:
-                        c.delete()
-                        self._debug(
-                            1, f"Deleted prior summary issue comment id={getattr(c, 'id', None)}"
-                        )
-                    except Exception as e:
-                        self._debug(
-                            1, f"Failed to delete issue comment id={getattr(c, 'id', None)}: {e}"
-                        )
-        except Exception as e:
-            self._debug(1, f"Listing issue comments failed: {e}")
+        comments = list(pr.get_issue_comments())
+
+        for c in comments:
+            body_raw = c.body or ""
+            body = body_raw.strip()
+            if marker not in body:
+                continue
+            try:
+                c.delete()
+                self._debug(1, f"Deleted prior summary issue comment id={c.id}")
+            except Exception as e:
+                self._debug(1, f"Failed to delete prior summary issue comment id={c.id}: {e}")
 
     def _has_prior_codex_review(self, pr: PullRequest) -> bool:
-        try:
-            for rev in pr.get_reviews():
-                body = rev.body or ""
-                if "Codex Autonomous Review:" in body:
-                    return True
-        except Exception:
-            pass
+        reviews = list(pr.get_reviews())
+        for rev in reviews:
+            if isinstance(rev.body, str) and "Codex Autonomous Review:" in rev.body:
+                return True
         # Also check issue comments, in case summary was posted there in previous versions
-        try:
-            for c in pr.get_issue_comments():
-                if isinstance(c, IssueComment) and "Codex Autonomous Review:" in (c.body or ""):
-                    return True
-        except Exception:
-            pass
+        comments = list(pr.get_issue_comments())
+        for c in comments:
+            if isinstance(c, IssueComment) and "Codex Autonomous Review:" in (c.body or ""):
+                return True
         return False
 
     def _collect_existing_comment_texts(self, pr: PullRequest) -> list[str]:
@@ -280,18 +278,15 @@ class ReviewProcessor:
         per-file findings.
         """
         texts: list[str] = []
-        try:
-            for rc in pr.get_review_comments():
-                if isinstance(rc, PullRequestComment):
-                    body = (rc.body or "").strip()
-                    path = getattr(rc, "path", "") or ""
-                    line = getattr(rc, "line", None) or getattr(rc, "original_line", None)
-                    if body:
-                        loc = f"{path}:{line}" if path and line else path or ""
-                        prefix = f"[{loc}] " if loc else ""
-                        texts.append(prefix + body)
-        except Exception:
-            pass
+        comments = list(pr.get_review_comments())
+        for rc in comments:
+            if isinstance(rc, PullRequestComment):
+                body = rc.body.strip()
+                path = rc.path
+                line = rc.line or rc.original_line
+                loc = f"{path}:{line}" if path and line else path
+                prefix = f"[{loc}] " if loc else ""
+                texts.append(prefix + body)
         return texts
 
     def _collect_existing_review_comments(self, pr: PullRequest) -> list[dict[str, Any]]:
@@ -302,16 +297,14 @@ class ReviewProcessor:
         which also covers resolved threads.
         """
         items: list[dict[str, Any]] = []
-        try:
-            for rc in pr.get_review_comments():
-                if isinstance(rc, PullRequestComment):
-                    body = (rc.body or "").strip()
-                    path = str(getattr(rc, "path", "") or "").strip()
-                    line = getattr(rc, "line", None) or getattr(rc, "original_line", None)
-                    if body and path and isinstance(line, int):
-                        items.append({"path": path, "line": int(line), "body": body})
-        except Exception:
-            pass
+        comments = list(pr.get_review_comments())
+        for rc in comments:
+            if isinstance(rc, PullRequestComment):
+                body = rc.body.strip()
+                path = rc.path
+                line = rc.line or rc.original_line
+                if body and path and isinstance(line, int):
+                    items.append({"path": path, "line": int(line), "body": body})
         return items
 
     def _prefilter_duplicates_by_location(
@@ -347,12 +340,8 @@ class ReviewProcessor:
         WINDOW = 3  # lines of tolerance
         filtered: list[dict[str, Any]] = []
         for f in findings:
-            loc = (f.get("code_location") or {}) if isinstance(f, dict) else {}
-            rng = (loc.get("line_range") or {}) if isinstance(loc, dict) else {}
-            abs_path = str(loc.get("absolute_file_path", ""))
-            rel_path = rename_map.get(to_rel(abs_path), to_rel(abs_path))
-            start = int(rng.get("start", 0) or 0)
-            end = int(rng.get("end", start) or start)
+            abs_path, start, end = self._extract_finding_location(f)
+            rel_path = rename_map.get(to_rel(abs_path), to_rel(abs_path)) if abs_path else ""
 
             if not rel_path or start <= 0:
                 filtered.append(f)
@@ -379,15 +368,14 @@ class ReviewProcessor:
         # Build compact payload
         compact_findings: list[dict[str, Any]] = []
         for idx, f in enumerate(findings):
-            loc = (f.get("code_location") or {}) if isinstance(f, dict) else {}
-            rng = (loc.get("line_range") or {}) if isinstance(loc, dict) else {}
+            abs_path, start, _ = self._extract_finding_location(f)
             compact_findings.append(
                 {
                     "index": idx,
                     "title": str(f.get("title", "")),
                     "body": str(f.get("body", "")),
-                    "path": str(loc.get("absolute_file_path", "")),
-                    "start": int(rng.get("start", 0) or 0),
+                    "path": abs_path,
+                    "start": start,
                 }
             )
 
@@ -415,6 +403,7 @@ class ReviewProcessor:
             model_name=self.config.fast_model_name,
             reasoning_effort=self.config.fast_reasoning_effort,
             suppress_stream=True,
+            config_overrides={"sandbox_mode": SandboxMode.DANGER_FULL_ACCESS},
         )
         try:
             data = json.loads(raw)
@@ -438,32 +427,25 @@ class ReviewProcessor:
         pr: PullRequest,
         head_sha: str,
         rename_map: dict[str, str],
-        summary: str,
     ) -> None:
-        """Post findings as a single PR review with deterministic anchors."""
+        """Post findings as a bundled PR review with inline comments."""
         repo_root = self.config.repo_root or Path(".").resolve()
 
-        review_comments: list[dict[str, Any]] = []
+        def to_rel(p: str) -> str:
+            try:
+                return str(Path(p).resolve().relative_to(repo_root))
+            except Exception:
+                return p.lstrip("./")
 
+        review_comments: list[dict[str, Any]] = []
         for finding in findings:
             title = str(finding.get("title", "Issue")).strip()
             body = str(finding.get("body", "")).strip()
-            location = finding.get("code_location", {}) or {}
-            abs_path = str(location.get("absolute_file_path", "")).strip()
-            rng = location.get("line_range", {}) or {}
-            start_line = int(rng.get("start", 0) or 0)
-            end_line = int(rng.get("end", start_line) or start_line)
-
+            abs_path, start_line, end_line = self._extract_finding_location(finding)
             if not abs_path or start_line <= 0:
                 continue
 
-            # Convert absolute path to repo-relative
-            try:
-                rel_path = str(Path(abs_path).resolve().relative_to(repo_root))
-            except ValueError:
-                rel_path = abs_path.lstrip("./")
-            rel_path = rename_map.get(rel_path, rel_path)
-
+            rel_path = rename_map.get(to_rel(abs_path), to_rel(abs_path))
             fmap = file_maps.get(rel_path)
             if not fmap:
                 continue
@@ -473,7 +455,8 @@ class ReviewProcessor:
             if not anchor:
                 if self.config.dry_run:
                     self._debug(
-                        1, f"DRY_RUN: would skip (no anchor) for {rel_path}:{start_line}-{end_line}"
+                        1,
+                        f"DRY_RUN: would skip (no anchor) for {rel_path}:{start_line}-{end_line}",
                     )
                 continue
 
@@ -484,8 +467,6 @@ class ReviewProcessor:
                 final_body = body.replace("```suggestion", "```diff")
 
             comment_body = f"{title}\n\n{final_body}" if final_body else title
-
-            # Build review comment payload (use line/side; ranges add start_line/start_side)
             payload: dict[str, Any] = {
                 "body": comment_body,
                 "path": rel_path,
@@ -500,44 +481,54 @@ class ReviewProcessor:
 
             review_comments.append(payload)
 
-        # If there are no inline comments after dedup, post a summary-only
-        # issue comment so reviewers still see the overall outcome.
-        if len(review_comments) == 0:
+        if not review_comments:
             if self.config.dry_run:
-                self._debug(1, "DRY_RUN: would create summary issue comment (0 findings)")
-                return
-            try:
-                pr.as_issue().create_comment(summary)
-                self._debug(1, "Posted summary-only issue comment (0 findings)")
-            except Exception as e:
-                self._debug(1, f"Failed to post summary-only issue comment: {e}")
+                self._debug(1, "DRY_RUN: no inline findings to post")
             return
 
-        # Submit as a single PR review (COMMENT event) to reduce notifications
-        if self.config.dry_run:
-            self._debug(
-                1,
-                f"DRY_RUN: would create PR review with {len(review_comments)} inline comments",
-            )
-            return
-
-        try:
-            url = f"{pr.url}/reviews"
-            review_payload: dict[str, Any] = {
-                "event": "COMMENT",
-                "body": summary,
+        # Post each finding as a standalone review comment (no PR review wrapper)
+        for payload in review_comments:
+            # Build a clean payload for the single-comment API
+            single: dict[str, Any] = {
+                "body": payload["body"],
+                "path": payload["path"],
+                "side": payload.get("side", "RIGHT"),
                 "commit_id": head_sha,
-                "comments": review_comments,
             }
-            pr._requester.requestJsonAndCheck("POST", url, input=review_payload)
-        except Exception as e:
-            self._debug(1, f"Failed to create bundled PR review: {e}")
-            # Fallback: post comments individually to avoid dropping feedback entirely
+            if "start_line" in payload:
+                # Range comment requires both start_line and start_side
+                single["start_line"] = int(payload["start_line"])  # range comment
+                single["start_side"] = str(payload.get("start_side", "RIGHT"))
+                single["line"] = int(payload["line"])
+            else:
+                single["line"] = int(payload["line"])  # single-line comment
+            if self.config.dry_run:
+                self._debug(
+                    1,
+                    f"DRY_RUN: would POST /comments for {single.get('path')}:{single.get('line')}",
+                )
+                continue
+            pr._requester.requestJsonAndCheck("POST", f"{pr.url}/comments", input=single)
+
+    @staticmethod
+    def _extract_finding_location(finding: dict[str, Any]) -> tuple[str, int, int]:
+        """Return (abs_path, start_line, end_line) from a finding dict; defaults to ("",0,0)."""
+        loc = finding.get("code_location")
+        if not isinstance(loc, dict):
+            return "", 0, 0
+        abs_path = str(loc.get("absolute_file_path") or "").strip()
+        rng = loc.get("line_range")
+        if not isinstance(rng, dict):
+            return abs_path, 0, 0
+
+        def as_int(x: Any, default: int = 0) -> int:
             try:
-                for payload in review_comments:
-                    single = dict(payload)
-                    single.pop("start_side", None)
-                    single["commit_id"] = head_sha
-                    pr._requester.requestJsonAndCheck("POST", f"{pr.url}/comments", input=single)
-            except Exception as e2:
-                self._debug(1, f"Fallback single-comment posting also failed: {e2}")
+                return int(x)
+            except (TypeError, ValueError):
+                return default
+
+        start = as_int(rng.get("start"), 0)
+        end = as_int(rng.get("end"), start)
+        if end <= 0 and start > 0:
+            end = start
+        return abs_path, start, end

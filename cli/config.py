@@ -35,7 +35,6 @@ class ReviewConfig:
     debug_level: int = 0
     stream_output: bool = True
     dry_run: bool = False
-    include_annotated_in_prompt: bool = False
     additional_prompt: str = ""
 
     # Repository paths
@@ -62,11 +61,11 @@ class ReviewConfig:
             except ValueError as e:
                 raise ConfigurationError(f"Invalid PR_NUMBER: {pr_num_str}") from e
 
-        # Mode configuration
-        mode = os.environ.get("CODEX_MODE", "review").strip().lower()
+        # fail on invalid input parameters & do not mask config errors!
 
+        mode = os.environ.get("CODEX_MODE", "review").strip()
         # Model configuration
-        model_provider = os.environ.get("CODEX_PROVIDER", "openai").strip().lower()
+        model_provider = os.environ.get("CODEX_PROVIDER", "openai").strip()
         model_name = os.environ.get("CODEX_MODEL", "gpt-5").strip()
         reasoning_effort = os.environ.get("CODEX_REASONING_EFFORT", "medium").strip()
         fast_model_name = os.environ.get("CODEX_FAST_MODEL", model_name).strip()
@@ -85,9 +84,6 @@ class ReviewConfig:
         debug_level = _parse_debug_level(os.environ.get("DEBUG_CODEREVIEW", "0"))
         stream_output = os.environ.get("STREAM_AGENT_MESSAGES", "1") != "0"
         dry_run = os.environ.get("DRY_RUN") == "1"
-        include_annotated_in_prompt = (
-            os.environ.get("REVIEW_INCLUDE_ANNOTATED") or ""
-        ).strip().lower() in ("1", "true", "yes")
 
         # Repository paths
         repo_root = None
@@ -108,7 +104,6 @@ class ReviewConfig:
             debug_level=debug_level,
             stream_output=stream_output,
             dry_run=dry_run,
-            include_annotated_in_prompt=include_annotated_in_prompt,
             additional_prompt=additional_prompt,
             repo_root=repo_root,
         )

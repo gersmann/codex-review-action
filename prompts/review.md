@@ -34,7 +34,7 @@ Below are some more detailed guidelines that you should apply to this specific r
 VERIFICATION AGAINST THE CODEBASE:
 
 - You have access to the full code base. Ground each finding in concrete repository code. 
-- Do not make speculative comments based on the diff, that you could verify by checking the full source moulde. 
+- Do not make speculative comments based on the diff, that you could verify by checking the full source module. 
 - Attribute causality to this patch: connect the changed line(s) to the behavior (e.g., removed guard enables a None deref; new import path is wrong; call signature now mismatches definition).
 
 HOW MANY FINDINGS TO RETURN:

@@ -7,7 +7,7 @@ branding:
 
 inputs:
   mode:
-    description: "Operation mode: 'review' (code review) or 'act' (autonomous editing)"
+    description: "Operation mode: review | act"
     required: false
     default: "review"
   openai_api_key:
@@ -18,7 +18,7 @@ inputs:
     required: false
     default: "gpt-5"
   reasoning_effort:
-    description: "Reasoning effort hint: minimal | low | medium | high"
+    description: "Reasoning effort: minimal | low | medium | high"
     required: false
     default: "medium"
   debug_level:
@@ -38,7 +38,7 @@ inputs:
     required: false
     default: "gpt-5-mini"
   fast_reasoning_effort:
-    description: "Reasoning effort for fast model (review mode only)"
+    description: "Fast reasoning effort (review mode only): minimal | low | medium | high"
     required: false
     default: "low"
   act_instructions:
@@ -57,14 +57,25 @@ inputs:
     description: "Additional pip arguments (e.g., --index-url)"
     required: false
     default: ""
-  include_annotated:
-    description: "Include annotated diffs with explicit HEAD line numbers in the model prompt (true/false)"
-    required: false
-    default: "true"
 
 runs:
   using: "composite"
   steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        set -euo pipefail
+        valid_efforts="minimal low medium high"
+        contains_word() { case " $1 " in *" $2 "*) return 0;; *) return 1;; esac; }
+        # Mode
+        case "${{ inputs.mode }}" in review|act) :;; *) echo "::error::Invalid mode: ${{ inputs.mode }} (allowed: review|act)"; exit 2;; esac
+        # Reasoning efforts
+        if ! contains_word "$valid_efforts" "${{ inputs.reasoning_effort }}"; then
+          echo "::error::Invalid reasoning_effort: ${{ inputs.reasoning_effort }} (allowed: minimal|low|medium|high)"; exit 2;
+        fi
+        if ! contains_word "$valid_efforts" "${{ inputs.fast_reasoning_effort }}"; then
+          echo "::error::Invalid fast_reasoning_effort: ${{ inputs.fast_reasoning_effort }} (allowed: minimal|low|medium|high)"; exit 2;
+        fi
     - name: Install Python dependencies
       shell: bash
       run: |
@@ -93,7 +104,6 @@ runs:
         DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
         DRY_RUN: ${{ inputs.dry_run }}
         STREAM_AGENT_MESSAGES: ${{ inputs.stream_agent_messages }}
-        REVIEW_INCLUDE_ANNOTATED: ${{ inputs.include_annotated }}
       run: |
         set -euo pipefail
         # Execute the CLI directly; it detects GitHub Actions via env

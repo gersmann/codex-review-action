@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from cli.config import ReviewConfig
 from cli.review_processor import ReviewProcessor
 
@@ -45,7 +43,9 @@ class FakePR:
     def get_review_comments(self):  # not used by these tests
         return []
 
-    def get_reviews(self):  # used by _has_prior_codex_review; keep empty to avoid semantic dedup
+    def get_reviews(
+        self,
+    ):  # used by _has_prior_codex_review; keep empty to avoid semantic dedup
         return []
 
 
@@ -60,7 +60,11 @@ def test_skips_summary_only_review_when_no_inline_comments(tmp_path: Path):
     # No prior markers to avoid semantic dedup/model calls
     pr = FakePR(url="https://api.github.com/repos/o/r/pulls/1")
 
-    result = {"findings": [], "overall_correctness": "patch is correct", "overall_explanation": ""}
+    result = {
+        "findings": [],
+        "overall_correctness": "patch is correct",
+        "overall_explanation": "",
+    }
 
     # changed_files empty -> file_maps empty
     rp._post_results(result, changed_files=[], repo=None, pr=pr, head_sha="deadbeef", rename_map={})
@@ -98,16 +102,21 @@ def test_creates_bundled_review_with_inline_comment(tmp_path: Path):
         ],
     }
 
-    rp._post_results(result, changed_files=changed_files, repo=None, pr=pr, head_sha="cafebabe", rename_map={})
+    rp._post_results(
+        result,
+        changed_files=changed_files,
+        repo=None,
+        pr=pr,
+        head_sha="cafebabe",
+        rename_map={},
+    )
 
-    # Exactly one POST to create a bundled PR review
+    # Exactly one POST to create a single review comment (no review wrapper)
     calls = pr._requester.calls
     assert len(calls) == 1
     method, url, payload = calls[0]
     assert method == "POST"
-    assert url.endswith("/reviews")
+    assert url.endswith("/comments")
     assert isinstance(payload, dict)
     assert payload.get("commit_id") == "cafebabe"
-    comments = payload.get("comments")
-    assert isinstance(comments, list) and len(comments) == 1
-    assert comments[0].get("path") == filename
+    assert payload.get("path") == filename
