@@ -3,7 +3,12 @@ name: Release Please
 on:
   push:
     branches: [main]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      release_as:
+        description: "Optional: force version (semver), e.g. 1.3.0"
+        type: string
+        required: false
 
 permissions:
   contents: write
@@ -17,9 +22,35 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: Prepare forced version commit (Release-As)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_as != '' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: false
+      - name: Create and push Release-As commit
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_as != '' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: release ${{ inputs.release_as }}" -m "Release-As: ${{ inputs.release_as }}"
+          git push origin HEAD:main
+      # If we just forced a Release-As commit, let the push-triggered run perform the release
+      # to avoid duplicate runs/races in no-PR mode.
+      - name: Skip direct release (waiting for push run)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_as != '' }}
+        run: echo "Release-As commit pushed; push-triggered run will cut the release."
       - name: Release Please
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.release_as != '') }}
         uses: googleapis/release-please-action@v4
         with:
           # Use manifest mode so we can evolve to multi-package later
           config-file: .github/release-please-config.json
           manifest-file: .github/.release-please-manifest.json
+          # Create releases directly without opening a PR/branch
+          skip-github-pull-request: true
+          # Ensure GitHub releases/tags are created
+          skip-github-release: false

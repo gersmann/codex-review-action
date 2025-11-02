@@ -113,12 +113,20 @@ class PromptBuilder:
             "</git_review_instructions>\n"
         ).format(review_comments_rel=review_comments_rel)
 
+        extra_instructions = ""
+        extra = self.config.additional_prompt
+        if extra:
+            extra_instructions = (
+                "<additional_instructions>\n" + extra + "\n</additional_instructions>\n"
+            )
+
         prompt = (
             f"{context}"
             f"{context_artifacts}"
             f"{changed_summary}"
             f"{review_instructions}"
             f"{line_rules}"
+            f"{extra_instructions}"
             "<response_format>Respond now with the JSON schema output only.</response_format>"
         )
 
