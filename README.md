@@ -148,9 +148,27 @@ How “/codex” Commands Work
 
 ## Release & Versioning
 
-- Release Please opens/updates a release PR on pushes to `main` and builds notes from commits (including direct commits).
-- Merge the release PR to create a GitHub release and semver tag (e.g., `v1.2.3`).
+- This repo uses Release Please in no‑PR mode: releases are created directly from `main` without opening a branch/PR. Tags and GitHub Releases are generated automatically on push.
+- In no‑PR mode, repository files (e.g., `CHANGELOG.md`, `version.txt`) are not modified on `main`. Release notes live on the GitHub Release page. If you prefer PRs that update files, set `skip-github-pull-request: false` in `.github/workflows/release-please.yml` and enable “Allow GitHub Actions to create and approve pull requests” in repo settings.
 - After publish, `.github/workflows/release-published.yml` updates the `v1` and `latest` tags to the release commit when the major is `v1`.
+
+### Manual Dispatch (force a specific version)
+
+You can manually trigger a release with a specific version via the workflow dispatch input. This creates an empty commit with a `Release-As:` trailer and lets the push-triggered run cut the release in no‑PR mode.
+
+Steps:
+- Go to Actions → “Release Please” → “Run workflow”.
+- Provide `release_as` (e.g., `1.3.0`).
+- The workflow pushes an empty commit like:
+
+  - Subject: `chore: release 1.3.0`
+  - Body: `Release-As: 1.3.0`
+
+- The subsequent push-triggered workflow run performs the release and creates tag + GitHub Release.
+
+Notes:
+- If you omit `release_as`, a manual dispatch simply runs the normal release flow.
+- Keep `permissions.contents: write` enabled so the workflow can push the empty commit.
 
 ## Local Development
 
