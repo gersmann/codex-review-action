@@ -10,7 +10,7 @@ from typing import Any, cast
 from codex import Codex, CodexOptions, ThreadOptions
 from codex.errors import CodexParseError, ThreadRunError
 
-from .config import ReviewConfig
+from .config import ReviewConfig, make_debug
 from .exceptions import CodexExecutionError
 
 _REASONING_EFFORT_VALUES = {"minimal", "low", "medium", "high", "xhigh"}
@@ -19,15 +19,21 @@ _WEB_SEARCH_MODE_VALUES = {"disabled", "cached", "live"}
 _APPROVAL_POLICY_VALUES = {"never", "on-request", "on-failure", "untrusted"}
 
 
+def _as_int_or_none(value: object) -> int | None:
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class CodexClient:
     """Client for executing Codex with streaming and response parsing."""
 
     def __init__(self, config: ReviewConfig) -> None:
         self.config = config
-
-    def _debug(self, level: int, message: str) -> None:
-        if self.config.debug_level >= level:
-            print(f"[debug{level}] {message}", file=sys.stderr)
+        self._debug = make_debug(config)
 
     # -------- Internal helpers (control flow + I/O) --------
     def _should_stream(self, suppress_stream: bool) -> bool:
@@ -37,25 +43,162 @@ class CodexClient:
     def _emit_debug_event(self, msg_type: str | None, msg: object) -> None:
         if self.config.debug_level < 1:
             return
-        if isinstance(msg, dict):
+        if isinstance(msg, Mapping):
             event_type_obj = msg.get("type")
             event_type = (
                 str(event_type_obj) if isinstance(event_type_obj, str) else (msg_type or "")
             )
-            if event_type == "item.updated":
-                item_obj = msg.get("item")
-                if isinstance(item_obj, dict) and item_obj.get("type") == "agent_message":
-                    return
-                self._debug(2, f"[codex-event] {event_type}: {msg}")
-                return
 
-            if event_type in {"error", "turn.failed"}:
-                self._debug(1, f"[codex-event] {event_type}: {msg}")
-                return
-            self._debug(2, f"[codex-event] {event_type}: {msg}")
+            summary = self._summarize_event_for_debug1(event_type, msg)
+            if summary:
+                self._debug(1, f"[codex-event] {summary}")
+            elif event_type in {"error", "turn.failed"}:
+                self._debug(1, f"[codex-event] {event_type}: {dict(msg)}")
+
+            if self.config.debug_level >= 2:
+                item_obj = msg.get("item")
+                if event_type == "item.updated" and isinstance(item_obj, Mapping):
+                    item_type_obj = item_obj.get("type")
+                    if item_type_obj == "agent_message":
+                        return
+                self._debug(2, f"[codex-event] {event_type}: {dict(msg)}")
             return
 
         self._debug(1, f"[codex-event] {msg_type}: {msg}")
+
+    def _summarize_event_for_debug1(self, event_type: str, msg: Mapping[str, object]) -> str | None:
+        if event_type == "thread.started":
+            thread_id_obj = msg.get("thread_id")
+            thread_id = str(thread_id_obj) if isinstance(thread_id_obj, str) else "unknown"
+            return f"thread.started thread_id={thread_id}"
+
+        if event_type == "turn.started":
+            return "turn.started"
+
+        if event_type == "turn.completed":
+            usage_obj = msg.get("usage")
+            if isinstance(usage_obj, Mapping):
+                input_tokens = _as_int_or_none(usage_obj.get("input_tokens"))
+                cached_tokens = _as_int_or_none(usage_obj.get("cached_input_tokens"))
+                output_tokens = _as_int_or_none(usage_obj.get("output_tokens"))
+                if (
+                    input_tokens is not None
+                    and cached_tokens is not None
+                    and output_tokens is not None
+                ):
+                    return (
+                        "turn.completed "
+                        f"usage in={input_tokens} cached={cached_tokens} out={output_tokens}"
+                    )
+            return "turn.completed"
+
+        if event_type == "turn.failed":
+            error_obj = msg.get("error")
+            if isinstance(error_obj, Mapping):
+                message_obj = error_obj.get("message")
+                if isinstance(message_obj, str) and message_obj.strip():
+                    return f"turn.failed message={self._clip(message_obj)}"
+            return "turn.failed"
+
+        if event_type == "error":
+            message_obj = msg.get("message")
+            if isinstance(message_obj, str) and message_obj.strip():
+                return f"error message={self._clip(message_obj)}"
+            return "error"
+
+        if event_type in {"item.started", "item.updated", "item.completed"}:
+            item_obj = msg.get("item")
+            if not isinstance(item_obj, Mapping):
+                return None
+            item_summary = self._summarize_item_for_debug1(item_obj, event_type)
+            if item_summary:
+                return item_summary
+
+        return None
+
+    def _summarize_item_for_debug1(self, item: Mapping[str, object], event_type: str) -> str | None:
+        item_type_obj = item.get("type")
+        if not isinstance(item_type_obj, str) or not item_type_obj:
+            return None
+
+        item_id_obj = item.get("id")
+        item_id = item_id_obj if isinstance(item_id_obj, str) and item_id_obj else "unknown"
+        prefix = f"{event_type} {item_type_obj}#{item_id}"
+
+        if item_type_obj == "agent_message":
+            if event_type != "item.completed":
+                return None
+            text_obj = item.get("text")
+            if isinstance(text_obj, str):
+                return f"{prefix} chars={len(text_obj)}"
+            return prefix
+
+        if item_type_obj == "command_execution":
+            status_obj = item.get("status")
+            status = status_obj if isinstance(status_obj, str) else "unknown"
+            command_obj = item.get("command")
+            command = self._clip(command_obj) if isinstance(command_obj, str) else ""
+            exit_code_obj = item.get("exit_code")
+            exit_code = _as_int_or_none(exit_code_obj)
+            summary = f"{prefix} status={status}"
+            if command:
+                summary += f" command={command}"
+            if exit_code is not None:
+                summary += f" exit_code={exit_code}"
+            return summary
+
+        if item_type_obj == "file_change":
+            status_obj = item.get("status")
+            status = status_obj if isinstance(status_obj, str) else "unknown"
+            changes_obj = item.get("changes")
+            count = len(changes_obj) if isinstance(changes_obj, list) else 0
+            return f"{prefix} status={status} changes={count}"
+
+        if item_type_obj == "mcp_tool_call":
+            status_obj = item.get("status")
+            status = status_obj if isinstance(status_obj, str) else "unknown"
+            server_obj = item.get("server")
+            tool_obj = item.get("tool")
+            server = server_obj if isinstance(server_obj, str) else "?"
+            tool = tool_obj if isinstance(tool_obj, str) else "?"
+            return f"{prefix} status={status} server={server} tool={tool}"
+
+        if item_type_obj == "web_search":
+            query_obj = item.get("query")
+            query = self._clip(query_obj) if isinstance(query_obj, str) else ""
+            return f"{prefix} query={query}" if query else prefix
+
+        if item_type_obj == "todo_list":
+            items_obj = item.get("items")
+            if isinstance(items_obj, list):
+                total = len(items_obj)
+                completed = sum(
+                    1
+                    for todo in items_obj
+                    if isinstance(todo, Mapping) and todo.get("completed") is True
+                )
+                return f"{prefix} todos={completed}/{total}"
+            return prefix
+
+        if item_type_obj == "reasoning":
+            text_obj = item.get("text")
+            if isinstance(text_obj, str):
+                return f"{prefix} chars={len(text_obj)}"
+            return prefix
+
+        if item_type_obj == "error":
+            message_obj = item.get("message")
+            if isinstance(message_obj, str):
+                return f"{prefix} message={self._clip(message_obj)}"
+            return prefix
+
+        return prefix
+
+    def _clip(self, text: str, max_chars: int = 120) -> str:
+        stripped = " ".join(text.split())
+        if len(stripped) <= max_chars:
+            return stripped
+        return stripped[: max_chars - 1] + "…"
 
     def _normalize_reasoning_effort(self, value: object, default: str) -> str:
         if not isinstance(value, str):

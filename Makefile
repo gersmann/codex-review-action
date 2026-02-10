@@ -12,9 +12,9 @@ help:
 	@echo "  hooks-run - Run pre-commit on all files"
 
 lint:
-	uv run ruff format $(PY_SRC)
-	uv run ruff check --fix $(PY_SRC)
-	uv run mypy $(PY_SRC)
+	uv run ruff format .
+	uv run ruff check --fix .
+	uv run mypy .
 
 fmt:
 	uv run ruff format $(PY_SRC)

@@ -12,23 +12,36 @@ This CLI provides autonomous code review capabilities for GitHub pull requests. 
 cli/
 ├── __init__.py
 ├── main.py                    # CLI entry point with argparse
-├── config.py                  # Configuration management
+├── config.py                  # Configuration loading + validation
+├── models.py                  # Typed dataclasses (comments, findings, payloads)
 ├── exceptions.py              # Custom exception hierarchy
 ├── codex_client.py            # Codex SDK wrapper for streaming + parsing
+├── github_client.py           # GitHub API helpers (PyGithub wrapper)
+├── git_ops.py                 # Git subprocess helpers
+├── review_prompt.py           # Review prompt composition
+├── edit_prompt.py             # ACT prompt/context formatting helpers
+├── context_manager.py         # Context artifact writing
 ├── patch_parser.py            # Patch parsing utilities
-├── prompt_builder.py          # Prompt composition and guidelines
-└── review_processor.py        # Core review processing logic
+├── anchor_engine.py           # Diff anchor resolution utilities
+├── workflows/
+│   ├── __init__.py
+│   ├── review_workflow.py     # Review orchestration
+│   └── edit_workflow.py       # ACT mode orchestration
+└── review/
+    ├── __init__.py
+    ├── dedupe.py              # Duplicate-detection helpers
+    └── posting.py             # Inline comment payload/build/post helpers
 ```
 
 ## Key Improvements
 
 ### 1. **Modular Design**
-- **GitHub API**: PyGithub is used directly in `review_processor.py`
+- **GitHub API**: PyGithub is wrapped in `github_client.py`; review orchestration lives in `workflows/review_workflow.py`
 - **Codex API**: `codex-python` SDK is wrapped in `codex_client.py`
 - **Patch Processing**: `patch_parser.py` contains utilities for parsing unified diffs
 - **Configuration**: `ReviewConfig` centralizes all configuration management
 - **Prompt Building**: `PromptBuilder` handles guidelines loading and prompt composition
-- **Review Processing**: `ReviewProcessor` orchestrates the entire review workflow
+- **Review Processing**: `ReviewWorkflow` orchestrates the entire review workflow
 
 ### 2. **Better Error Handling**
 - Custom exception hierarchy instead of `sys.exit()` calls
@@ -71,8 +84,8 @@ python -m cli.main --repo owner/repo --pr 123 --debug 2
 When used via the composite action, the CLI runs in GitHub Actions mode automatically and reads the event payload to determine whether to run a full review or a comment-triggered edit.
 
 Review posting behavior:
-- If findings exist, Codex posts a single PR review containing a summary and inline comments.
-- If there are zero findings, Codex posts a PR-level issue comment with the summary so reviewers still see the outcome.
+- Codex posts a PR-level issue comment with a review summary.
+- Findings are posted as standalone inline PR review comments on the relevant lines.
 
 Comment-triggered edits
 
@@ -105,16 +118,8 @@ Comment-triggered edits
 
 Each module can be tested independently:
 
-```python
-# Test configuration
-from cli.config import ReviewConfig
-config = ReviewConfig.from_environment()
-
-# PyGithub usage is internal to ReviewProcessor
-
-# Test patch parsing
-from cli.patch_parser import parse_valid_head_lines_from_patch
-lines = parse_valid_head_lines_from_patch(patch_content)
+```bash
+pytest tests/ -v
 ```
 
 ## Deduplication on Repeated Runs
