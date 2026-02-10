@@ -1,3 +1,1 @@
-codex-python
 PyGithub
-

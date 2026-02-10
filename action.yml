@@ -16,7 +16,7 @@ inputs:
   model:
     description: "Model to use (e.g., gpt-5, gpt-4.1-mini)"
     required: false
-    default: "gpt-5"
+    default: "gpt-5.1-codex-max"
   reasoning_effort:
     description: "Reasoning effort: minimal | low | medium | high"
     required: false
@@ -24,7 +24,7 @@ inputs:
   debug_level:
     description: "Debug verbosity: 0 (off), 1 (basic), 2 (trace)"
     required: false
-    default: "0"
+    default: "1"
   dry_run:
     description: "If '1', print payloads but do not post comments"
     required: false
@@ -50,9 +50,9 @@ inputs:
     required: false
     default: ""
   codex_python_version:
-    description: "Version spec for codex-python on PyPI (e.g., '>=0.3.0')"
+    description: "Version spec for codex-python on PyPI (e.g., '==1.0.0b3')"
     required: false
-    default: "==0.3.0"
+    default: "==1.0.0b3"
   extra_pip_args:
     description: "Additional pip arguments (e.g., --index-url)"
     required: false
@@ -67,6 +67,7 @@ runs:
         set -euo pipefail
         valid_efforts="minimal low medium high"
         contains_word() { case " $1 " in *" $2 "*) return 0;; *) return 1;; esac; }
+        codex_version_spec="${{ inputs.codex_python_version }}"
         # Mode
         case "${{ inputs.mode }}" in review|act) :;; *) echo "::error::Invalid mode: ${{ inputs.mode }} (allowed: review|act)"; exit 2;; esac
         # Reasoning efforts
@@ -76,14 +77,19 @@ runs:
         if ! contains_word "$valid_efforts" "${{ inputs.fast_reasoning_effort }}"; then
           echo "::error::Invalid fast_reasoning_effort: ${{ inputs.fast_reasoning_effort }} (allowed: minimal|low|medium|high)"; exit 2;
         fi
+        # SDK compatibility (this action expects codex-python 1.x API)
+        if echo "$codex_version_spec" | grep -Eq '(^|[<>=~! ,])0\.'; then
+          echo "::error::Invalid codex_python_version: ${codex_version_spec}. This action requires codex-python >=1.0.0b3."
+          exit 2
+        fi
     - name: Install Python dependencies
       shell: bash
       run: |
         set -euo pipefail
         python3 -m pip install --upgrade pip
         if [ -n "${{ inputs.codex_python_version }}" ]; then
-          # Pin codex-python first; requirements.txt lists it unpinned
-          python3 -m pip install ${{ inputs.extra_pip_args }} "codex-python${{ inputs.codex_python_version }}"
+          # Pin codex-python first. Keep --pre to allow prerelease pins such as 1.0.0b3.
+          python3 -m pip install --pre ${{ inputs.extra_pip_args }} "codex-python${{ inputs.codex_python_version }}"
         fi
         python3 -m pip install ${{ inputs.extra_pip_args }} -r "${{ github.action_path }}/requirements.txt"
 

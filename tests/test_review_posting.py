@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 from cli.config import ReviewConfig
 from cli.review_processor import ReviewProcessor
@@ -67,7 +68,14 @@ def test_skips_summary_only_review_when_no_inline_comments(tmp_path: Path):
     }
 
     # changed_files empty -> file_maps empty
-    rp._post_results(result, changed_files=[], repo=None, pr=pr, head_sha="deadbeef", rename_map={})
+    rp._post_results(
+        result,
+        changed_files=[],
+        repo=None,
+        pr=cast(Any, pr),
+        head_sha="deadbeef",
+        rename_map={},
+    )
 
     # Ensure we did not POST a review (no summary-only reviews allowed)
     assert len(pr._requester.calls) == 0
@@ -104,9 +112,9 @@ def test_creates_bundled_review_with_inline_comment(tmp_path: Path):
 
     rp._post_results(
         result,
-        changed_files=changed_files,
+        changed_files=cast(list[Any], changed_files),
         repo=None,
-        pr=pr,
+        pr=cast(Any, pr),
         head_sha="cafebabe",
         rename_map={},
     )

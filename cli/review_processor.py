@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from codex.config import SandboxMode
 from github import Github
 from github.File import File
 from github.IssueComment import IssueComment
@@ -138,7 +137,7 @@ class ReviewProcessor:
                     # Skip external sandbox: allow git commands without codex-linux-sandbox
                     # this is in CI, so no interactions with a real environment in the first place.
                     # necessary for CI now as long as the linux sandbox is not available.
-                    "sandbox_mode": SandboxMode.DANGER_FULL_ACCESS,
+                    "sandbox_mode": "danger-full-access",
                 },
             )
 
@@ -403,7 +402,7 @@ class ReviewProcessor:
             model_name=self.config.fast_model_name,
             reasoning_effort=self.config.fast_reasoning_effort,
             suppress_stream=True,
-            config_overrides={"sandbox_mode": SandboxMode.DANGER_FULL_ACCESS},
+            config_overrides={"sandbox_mode": "danger-full-access"},
         )
         try:
             data = json.loads(raw)

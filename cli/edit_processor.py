@@ -6,10 +6,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from codex.config import (
-    SandboxMode,
-    SandboxWorkspaceWrite,
-)
 from github import Github
 
 from .codex_client import CodexClient
@@ -365,18 +361,10 @@ class EditProcessor:
         except Exception:
             return ""
 
-    def _build_edit_overrides(self) -> dict:
-        repo_root = self.config.repo_root or Path(".").resolve()
-        sandbox_ws = SandboxWorkspaceWrite(
-            writable_roots=[str(repo_root)],
-            network_access=True,
-            exclude_tmpdir_env_var=False,
-            exclude_slash_tmp=False,
-        )
+    def _build_edit_overrides(self) -> dict[str, Any]:
         return {
             # Enable planning and patch application in ACT mode
             "include_plan_tool": True,
-            "include_apply_patch_tool": False,
             # Overwrite any conservative defaults from the client
             "base_instructions": (
                 "You are in ACT mode and MUST make the requested code changes. "
@@ -384,8 +372,7 @@ class EditProcessor:
                 "Use <comment_context> (path/line/diff) and <file_excerpt> to locate the change precisely."
             ),
             # Writable sandbox over the repo
-            "sandbox_mode": SandboxMode.DANGER_FULL_ACCESS,
-            "sandbox_workspace_write": sandbox_ws,
+            "sandbox_mode": "danger-full-access",
         }
 
     def _safe_reply(self, repo: Any, pr: Any, comment_ctx: dict | None, text: str) -> None:

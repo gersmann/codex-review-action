@@ -1,25 +1,22 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from codex import CodexClient as CoreCodexClient
-from codex import CodexConfig
-from codex.config import ApprovalPolicy, ReasoningEffort, SandboxMode
-from codex.event import Event
-from codex.protocol.types import (
-    EventMsgAgentMessage,
-    EventMsgAgentMessageDelta,
-    EventMsgAgentReasoningDelta,
-    EventMsgError,
-    EventMsgTaskComplete,
-)
+from codex import Codex, CodexOptions, ThreadOptions
+from codex.errors import CodexParseError, ThreadRunError
 
 from .config import ReviewConfig
 from .exceptions import CodexExecutionError
+
+_REASONING_EFFORT_VALUES = {"minimal", "low", "medium", "high", "xhigh"}
+_SANDBOX_MODE_VALUES = {"read-only", "workspace-write", "danger-full-access"}
+_WEB_SEARCH_MODE_VALUES = {"disabled", "cached", "live"}
+_APPROVAL_POLICY_VALUES = {"never", "on-request", "on-failure", "untrusted"}
 
 
 class CodexClient:
@@ -37,33 +34,188 @@ class CodexClient:
         """Return True if stdout streaming is enabled for this call."""
         return bool(self.config.stream_output and not suppress_stream)
 
-    def _emit_debug_delta(self, msg: dict[str, Any]) -> None:
-        """Emit condensed agent deltas to stderr when debug is on."""
+    def _emit_debug_event(self, msg_type: str | None, msg: object) -> None:
         if self.config.debug_level < 1:
             return
-        d = msg.get("delta")
-        if isinstance(d, str):
-            d_one_line = d.replace("\n", "").replace("\r", "")
-            print(d_one_line, end="", file=sys.stderr)
-
-    def _emit_debug_event(self, msg_type: str | None, msg: dict[str, Any] | None) -> None:
-        if self.config.debug_level < 1:
-            return
-        event_type = msg_type or ""
         if isinstance(msg, dict):
-            event_type = str(msg.get("type") or event_type)
-        event_type_lower = event_type.lower()
-        if "exec_command" in event_type_lower and "delta" in event_type_lower:
-            return
-        if not isinstance(msg, dict):
-            self._debug(1, f"[codex-event] {msg_type}: {msg}")
-            return
-        if msg_type in ("error", "stream_error", "background_event"):
-            detail = msg.get("message")
-            if detail:
-                self._debug(1, f"[codex-event] {msg_type}: {detail}")
+            event_type_obj = msg.get("type")
+            event_type = (
+                str(event_type_obj) if isinstance(event_type_obj, str) else (msg_type or "")
+            )
+            if event_type == "item.updated":
+                item_obj = msg.get("item")
+                if isinstance(item_obj, dict) and item_obj.get("type") == "agent_message":
+                    return
+                self._debug(2, f"[codex-event] {event_type}: {msg}")
                 return
+
+            if event_type in {"error", "turn.failed"}:
+                self._debug(1, f"[codex-event] {event_type}: {msg}")
+                return
+            self._debug(2, f"[codex-event] {event_type}: {msg}")
+            return
+
         self._debug(1, f"[codex-event] {msg_type}: {msg}")
+
+    def _normalize_reasoning_effort(self, value: object, default: str) -> str:
+        if not isinstance(value, str):
+            return default
+        raw = value.strip().lower()
+        normalized = raw.replace("_", "")
+        if normalized == "x-high":
+            normalized = "xhigh"
+        if normalized in _REASONING_EFFORT_VALUES:
+            return normalized
+        self._debug(1, f"Invalid reasoning effort '{value}', falling back to '{default}'")
+        return default
+
+    def _normalize_sandbox_mode(self, value: object, default: str) -> str:
+        if not isinstance(value, str):
+            return default
+        normalized = value.strip().lower().replace("_", "-")
+        if normalized in _SANDBOX_MODE_VALUES:
+            return normalized
+        self._debug(1, f"Invalid sandbox mode '{value}', falling back to '{default}'")
+        return default
+
+    def _normalize_web_search_mode(self, value: object, default: str) -> str:
+        if not isinstance(value, str):
+            return default
+        normalized = value.strip().lower().replace("_", "-")
+        if normalized in _WEB_SEARCH_MODE_VALUES:
+            return normalized
+        self._debug(1, f"Invalid web search mode '{value}', falling back to '{default}'")
+        return default
+
+    def _normalize_approval_policy(self, value: object, default: str) -> str:
+        if not isinstance(value, str):
+            return default
+        normalized = value.strip().lower().replace("_", "-")
+        if normalized in _APPROVAL_POLICY_VALUES:
+            return normalized
+        self._debug(1, f"Invalid approval policy '{value}', falling back to '{default}'")
+        return default
+
+    def _coerce_optional_bool(self, value: object) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        return None
+
+    def _coerce_optional_str(self, value: object) -> str | None:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return stripped
+        return None
+
+    def _coerce_optional_str_list(self, value: object) -> list[str] | None:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return [stripped] if stripped else None
+        if not isinstance(value, Sequence):
+            return None
+        out: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                stripped = item.strip()
+                if stripped:
+                    out.append(stripped)
+        return out or None
+
+    def _drop_nones(self, value: object) -> object:
+        if isinstance(value, dict):
+            out: dict[str, object] = {}
+            for k, v in value.items():
+                if v is None:
+                    continue
+                cleaned = self._drop_nones(v)
+                if cleaned is not None:
+                    out[k] = cleaned
+            return out
+        if isinstance(value, list):
+            out_list: list[object] = []
+            for item in value:
+                if item is None:
+                    continue
+                cleaned = self._drop_nones(item)
+                if cleaned is not None:
+                    out_list.append(cleaned)
+            return out_list
+        return value
+
+    def _build_thread_options(
+        self,
+        *,
+        model: str,
+        reasoning_effort: str,
+        overrides: dict[str, Any],
+    ) -> tuple[ThreadOptions, dict[str, Any]]:
+        effective = dict(overrides)
+        model_override = self._coerce_optional_str(effective.pop("model", None))
+        resolved_model = model_override or model
+
+        sandbox_mode = self._normalize_sandbox_mode(
+            effective.pop("sandbox_mode", "read-only"), "read-only"
+        )
+        resolved_reasoning_effort = self._normalize_reasoning_effort(
+            effective.pop("model_reasoning_effort", reasoning_effort),
+            reasoning_effort,
+        )
+        approval_policy = self._normalize_approval_policy(
+            effective.pop("approval_policy", "never"), "never"
+        )
+        web_search_mode = self._normalize_web_search_mode(
+            effective.pop("web_search_mode", "live"), "live"
+        )
+        web_search_enabled = self._coerce_optional_bool(effective.pop("web_search_enabled", None))
+        network_access_enabled = self._coerce_optional_bool(
+            effective.pop("network_access_enabled", None)
+        )
+        skip_git_repo_check = self._coerce_optional_bool(effective.pop("skip_git_repo_check", None))
+        working_directory = self._coerce_optional_str(effective.pop("working_directory", None))
+        additional_directories = self._coerce_optional_str_list(
+            effective.pop("additional_directories", None)
+        )
+
+        thread_options = ThreadOptions(
+            model=resolved_model,
+            sandbox_mode=cast(Any, sandbox_mode),
+            working_directory=working_directory,
+            skip_git_repo_check=bool(skip_git_repo_check)
+            if skip_git_repo_check is not None
+            else False,
+            model_reasoning_effort=cast(Any, resolved_reasoning_effort),
+            network_access_enabled=network_access_enabled,
+            web_search_mode=cast(Any, web_search_mode),
+            web_search_enabled=web_search_enabled,
+            approval_policy=cast(Any, approval_policy),
+            additional_directories=additional_directories,
+        )
+        cleaned_overrides = self._drop_nones(effective)
+        if not isinstance(cleaned_overrides, dict):
+            cleaned_overrides = {}
+        return thread_options, cast(dict[str, Any], cleaned_overrides)
+
+    def _resolve_api_key(self) -> str | None:
+        # Prefer explicit CODEX_API_KEY, fallback to OPENAI_API_KEY.
+        codex_api_key = os.environ.get("CODEX_API_KEY")
+        if isinstance(codex_api_key, str):
+            stripped = codex_api_key.strip()
+            if stripped:
+                return stripped
+
+        openai_api_key = os.environ.get("OPENAI_API_KEY")
+        if isinstance(openai_api_key, str):
+            stripped = openai_api_key.strip()
+            if stripped:
+                return stripped
+        return None
 
     def execute(
         self,
@@ -80,91 +232,73 @@ class CodexClient:
         When suppress_stream is True, do not print streamed tokens to stdout.
         config_overrides: Additional config overrides to merge with defaults.
         """
-        # Resolve model/effort once, up front.
-        model = model_name or self.config.model_name
-        effort_raw = reasoning_effort or self.config.reasoning_effort or "medium"
-        effort_enum = ReasoningEffort(str(effort_raw).strip().lower())
+        model = (model_name or self.config.model_name).strip()
+        effort = self._normalize_reasoning_effort(
+            reasoning_effort or self.config.reasoning_effort or "medium",
+            "medium",
+        )
 
-        # Build base config
-        base_config: dict[str, Any] = {
-            "approval_policy": ApprovalPolicy.NEVER,
-            "sandbox_mode": SandboxMode.READ_ONLY,
+        base_overrides: dict[str, Any] = {
             "include_plan_tool": True,
-            "include_apply_patch_tool": False,
             "include_view_image_tool": False,
             "show_raw_agent_reasoning": False,
-            "model": model,
-            "model_reasoning_effort": effort_enum,
-            "model_provider": self.config.model_provider,
-            "mcp_servers": {},
-            "tools": {"web_search": True, "view_image": False},
         }
-
-        # Merge in any provided overrides
         if config_overrides:
-            base_config.update(config_overrides)
+            base_overrides.update(config_overrides)
 
-        # Use pydantic validation with a Mapping to avoid overly strict mypy kwarg checks
-        overrides = CodexConfig.model_validate(cast(Mapping[str, Any], base_config))
+        thread_options, sdk_overrides = self._build_thread_options(
+            model=model,
+            reasoning_effort=effort,
+            overrides=base_overrides,
+        )
 
         last_msg: str | None = None
         last_agent_message: str | None = None
-        last_task_message: str | None = None
         buf_parts: list[str] = []
         stream_enabled = self._should_stream(suppress_stream)
-        # Track whether we've printed any content to decide on newlines cleanly.
         printed_any = False
         parse_errors_seen = False
-
-        conversation = None
+        agent_message_state: dict[str, str] = {}
         try:
-            client = CoreCodexClient(load_default_config=False, config=overrides)
-            conversation = client.start_conversation(load_default_config=False)
-            conversation.submit_user_turn(prompt)
-
-            # Iterate defensively: tolerate parser/validation errors from SDK.
-            it = iter(conversation)
-            while True:
-                try:
-                    event = next(it)
-                except StopIteration:
-                    break
-                except Exception as parse_err:
-                    self._debug(1, f"[codex-event-parse-error] {parse_err}")
-                    parse_errors_seen = True
-                    continue
-
-                result = self._handle_conversation_event(event, stream_enabled, buf_parts)
+            client = Codex(
+                options=CodexOptions(
+                    config=cast(Any, sdk_overrides),
+                    api_key=self._resolve_api_key(),
+                )
+            )
+            thread = client.start_thread(thread_options)
+            stream = thread.run_streamed(prompt)
+            for event in stream.events:
+                result = self._handle_stream_event(
+                    event=event,
+                    stream_enabled=stream_enabled,
+                    buf_parts=buf_parts,
+                    agent_message_state=agent_message_state,
+                )
                 val = result.get("last_msg")
                 if isinstance(val, str) or val is None:
                     last_msg = val
                 agent_msg = result.get("agent_message")
                 if isinstance(agent_msg, str):
                     last_agent_message = agent_msg
-                task_msg = result.get("task_message")
-                if isinstance(task_msg, str):
-                    last_task_message = task_msg
                 if result.get("printed"):
                     printed_any = True
                 if result.get("task_complete"):
                     if stream_enabled and printed_any:
                         print("", file=sys.stdout, flush=True)
                     break
-
+        except CodexParseError as parse_err:
+            self._debug(1, f"[codex-event-parse-error] {parse_err}")
+            parse_errors_seen = True
+        except ThreadRunError as run_err:
+            raise CodexExecutionError(f"Codex execution failed: {run_err}") from run_err
+        except CodexExecutionError:
+            raise
         except Exception as e:
             raise CodexExecutionError(f"Codex execution failed: {e}") from e
-        finally:
-            try:
-                if conversation is not None:
-                    conversation.shutdown()
-            except Exception:
-                pass
 
         if last_agent_message:
             return last_agent_message
-
-        if last_task_message:
-            return last_task_message
 
         if last_msg:
             return last_msg
@@ -252,69 +386,72 @@ class CodexClient:
             raise json.JSONDecodeError("Top-level JSON is not an object", s2, 0)
         return cast(dict[str, Any], obj3)
 
-    # -------- Extracted loop body helper --------
-    def _handle_conversation_event(
-        self, event: Any, stream_enabled: bool, buf_parts: list[str]
+    def _handle_stream_event(
+        self,
+        event: object,
+        stream_enabled: bool,
+        buf_parts: list[str],
+        agent_message_state: dict[str, str],
     ) -> dict[str, Any]:
-        """Handle a single conversation event and return state deltas.
-
-        Returns a dict with optional keys:
-        - "last_msg": str | None — last agent- or task-complete message seen
-        - "agent_message": str | None — last EventMsgAgentMessage payload
-        - "task_message": str | None — task-complete last_agent_message payload
-        - "printed": bool — whether anything was printed to stdout
-        - "task_complete": bool — whether a task-complete event occurred
-        May raise CodexExecutionError on error events.
-        """
         state: dict[str, Any] = {
             "last_msg": None,
             "agent_message": None,
-            "task_message": None,
             "printed": False,
             "task_complete": False,
         }
-
-        if not isinstance(event, Event):
+        if not isinstance(event, Mapping):
             return state
 
-        # event.msg can be a union of EventMsg and AnyEventMsg; treat dynamically
-        msg: Any = event.msg
-        inner = getattr(msg, "root", msg)
+        event_type_obj = event.get("type")
+        event_type = event_type_obj if isinstance(event_type_obj, str) else None
+        self._emit_debug_event(event_type, event)
 
-        if isinstance(inner, EventMsgAgentMessageDelta | EventMsgAgentReasoningDelta):
-            self._emit_debug_delta({"delta": getattr(inner, "delta", "")})
-        else:
-            # Use model_dump() to avoid pydantic repr noise
-            try:
-                payload = inner.model_dump()
-            except Exception:
-                payload = None
-            self._emit_debug_event(getattr(inner, "type", None), payload)
+        if event_type == "error":
+            message_obj = event.get("message")
+            message = message_obj if isinstance(message_obj, str) else "Unknown error"
+            raise CodexExecutionError(f"Codex error: {message}")
 
-        if isinstance(inner, EventMsgAgentMessage):
-            state["last_msg"] = inner.message
-            state["agent_message"] = inner.message
-            buf_parts.append(inner.message)
-            if stream_enabled:
-                print(inner.message, end="", flush=True)
-                state["printed"] = True
-            return state
+        if event_type == "turn.failed":
+            error_obj = event.get("error")
+            if isinstance(error_obj, dict):
+                message_obj = error_obj.get("message")
+                if isinstance(message_obj, str) and message_obj.strip():
+                    raise CodexExecutionError(f"Codex error: {message_obj}")
+            raise CodexExecutionError("Codex error: turn failed")
 
-        if isinstance(inner, EventMsgAgentMessageDelta):
-            buf_parts.append(inner.delta)
-            if stream_enabled:
-                print(inner.delta, end="", flush=True)
-                state["printed"] = True
-            return state
-
-        if isinstance(inner, EventMsgTaskComplete):
-            if inner.last_agent_message:
-                state["last_msg"] = inner.last_agent_message
-                state["task_message"] = inner.last_agent_message
+        if event_type == "turn.completed":
             state["task_complete"] = True
             return state
 
-        if isinstance(inner, EventMsgError):
-            raise CodexExecutionError(f"Codex error: {inner.message}")
+        if event_type not in {"item.updated", "item.completed"}:
+            return state
 
+        item_obj = event.get("item")
+        if not isinstance(item_obj, Mapping):
+            return state
+
+        if item_obj.get("type") != "agent_message":
+            return state
+
+        text_obj = item_obj.get("text")
+        if not isinstance(text_obj, str):
+            return state
+        item_id_obj = item_obj.get("id")
+        item_id = item_id_obj if isinstance(item_id_obj, str) and item_id_obj else "agent_message"
+        previous_text = agent_message_state.get(item_id, "")
+        delta = text_obj
+        if previous_text:
+            if text_obj.startswith(previous_text):
+                delta = text_obj[len(previous_text) :]
+            elif text_obj == previous_text:
+                delta = ""
+        agent_message_state[item_id] = text_obj
+
+        state["last_msg"] = text_obj
+        state["agent_message"] = text_obj
+        if delta:
+            buf_parts.append(delta)
+            if stream_enabled:
+                print(delta, end="", flush=True)
+                state["printed"] = True
         return state

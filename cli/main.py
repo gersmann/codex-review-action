@@ -96,7 +96,7 @@ Environment Variables:
     parser.add_argument(
         "--reasoning-effort",
         dest="reasoning_effort",
-        choices=["low", "medium", "high"],
+        choices=["minimal", "low", "medium", "high"],
         default="medium",
         help="Reasoning effort level (default: medium)",
     )
@@ -110,7 +110,7 @@ Environment Variables:
     parser.add_argument(
         "--fast-reasoning-effort",
         dest="fast_reasoning_effort",
-        choices=["low", "medium", "high"],
+        choices=["minimal", "low", "medium", "high"],
         default="low",
         help="Reasoning effort for fast model (default: low)",
     )
