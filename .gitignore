@@ -21,3 +21,4 @@ dist/
 build/
 
 /.codex-context/
+/.beads/

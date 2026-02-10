@@ -27,11 +27,11 @@ jobs:
         with:
           fetch-depth: 0
       - name: Codex autonomous review
-        uses: gersmann/codex-review-action@v1
+        uses: gersmann/codex-review-action@next
         with:
           mode: review
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-          model: gpt-5
+          model: gpt-5.1-codex-max
           reasoning_effort: medium
           debug_level: 1
 

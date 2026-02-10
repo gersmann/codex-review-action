@@ -14,7 +14,7 @@ cli/
 ├── main.py                    # CLI entry point with argparse
 ├── config.py                  # Configuration management
 ├── exceptions.py              # Custom exception hierarchy
-├── (no client wrapper)        # Direct PyGithub usage in review_processor.py
+├── codex_client.py            # Codex SDK wrapper for streaming + parsing
 ├── patch_parser.py            # Patch parsing utilities
 ├── prompt_builder.py          # Prompt composition and guidelines
 └── review_processor.py        # Core review processing logic
@@ -24,6 +24,7 @@ cli/
 
 ### 1. **Modular Design**
 - **GitHub API**: PyGithub is used directly in `review_processor.py`
+- **Codex API**: `codex-python` SDK is wrapped in `codex_client.py`
 - **Patch Processing**: `patch_parser.py` contains utilities for parsing unified diffs
 - **Configuration**: `ReviewConfig` centralizes all configuration management
 - **Prompt Building**: `PromptBuilder` handles guidelines loading and prompt composition

@@ -117,12 +117,13 @@ How “/codex” Commands Work
 - model: e.g., gpt-5 (default: gpt-5)
 - reasoning_effort: minimal | low | medium | high (default: medium)
 - fast_model (review only): e.g., gpt-5-mini
-- fast_reasoning_effort (review only): low | medium | high
+- fast_reasoning_effort (review only): minimal | low | medium | high
 - debug_level: 0 | 1 | 2 (default: 0)
 - stream_agent_messages: '0' | '1' (default: '1')
 - dry_run (act only): '0' | '1' (default: '0')
 - act_instructions (act): extra guidance appended to edit prompt
 - additional_prompt (review): extra reviewer instructions (verbatim)
+- codex_python_version: codex-python version spec (default: `==1.0.0b3`)
 - extra_pip_args: additional pip flags (e.g., private index)
 
 ## What It Posts
