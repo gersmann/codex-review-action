@@ -103,8 +103,6 @@ Comment-triggered edits
 | `CODEX_MODEL` | Model name | `gpt-5` |
 | `CODEX_PROVIDER` | Model provider | `openai` |
 | `CODEX_REASONING_EFFORT` | Reasoning effort level | `medium` |
-| `CODEX_FAST_MODEL` | Fast model for dedup on repeated runs | `gpt-5-mini` |
-| `CODEX_FAST_REASONING_EFFORT` | Reasoning effort for fast model | `low` |
 | `CODEX_ACT_INSTRUCTIONS` | Additional instructions for act mode | `` |
 | `DEBUG_CODEREVIEW` | Debug level (0-2) | `0` |
 | `DRY_RUN` | Skip posting (1 for dry run) | `0` |
@@ -125,14 +123,9 @@ pytest tests/ -v
 ## Deduplication on Repeated Runs
 
 - The CLI detects if a prior Codex review exists on the PR (looks for a summary containing "Codex Autonomous Review:" or earlier inline review comments).
-- When detected, it now performs two layers of dedupe:
-  - A strict prefilter that drops any new finding if an inline comment already exists on the same file within a few lines (covers resolved threads as well; we do not re‑post resolved items).
-  - A fast‑model semantic pass to cull remaining near‑duplicates. You will see lines like:
-    - `Prefilter dropped 2/5 findings due to existing comments`
-    - `Dedup kept 3/5 findings (fast model)`
-- Configure the semantic pass via flags or env:
-  - `--fast-model`, `--fast-reasoning-effort`
-  - `CODEX_FAST_MODEL`, `CODEX_FAST_REASONING_EFFORT`
+- When detected, deduplication happens in two layers:
+  - **Inline semantic dedup**: existing review comments are passed to the model's structured-output turn (turn 2) so it can exclude redundant findings at generation time.
+  - **Location prefilter**: a post-hoc safety net that drops any new finding if an inline comment already exists on the same file within a few lines.
 
 ### Customizing the Review Prompt
 

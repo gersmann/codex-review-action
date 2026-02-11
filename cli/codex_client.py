@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import os
-import re
 import sys
 from collections.abc import Mapping
 from typing import Any, cast
@@ -373,79 +371,6 @@ class CodexClient:
         except Exception as e:
             raise CodexExecutionError(f"Codex execution failed: {e}") from e
 
-    def parse_json_response(self, text: str) -> dict[str, Any]:
-        """Parse a JSON object from model output that may include fences or extra text.
-
-        Strategy, in order:
-        1) If fenced with ``` or ```json, strip the fences and parse.
-        2) Scan for the first balanced top-level JSON object (brace counting) and parse it.
-        3) As a final fallback, attempt a broad slice from the first '{' to the last '}'.
-        """
-        s = text.strip()
-        fence_match = re.match(r"^```(?:json)?\n([\s\S]*?)\n```\s*$", s)
-        if fence_match:
-            inner = fence_match.group(1)
-            obj = json.loads(inner)
-            if not isinstance(obj, dict):
-                raise json.JSONDecodeError("Top-level JSON is not an object", inner, 0)
-            return cast(dict[str, Any], obj)
-
-        # Robust extractor: find first balanced top-level JSON object
-        start = s.find("{")
-        if start != -1:
-            depth = 0
-            for i in range(start, len(s)):
-                ch = s[i]
-                if ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        candidate = s[start : i + 1]
-                        try:
-                            obj = json.loads(candidate)
-                            if isinstance(obj, dict):
-                                return cast(dict[str, Any], obj)
-                        except json.JSONDecodeError:
-                            pass
-                        break
-
-        # Fallback: extract the outermost JSON slice (may succeed on simple cases)
-        first = s.find("{")
-        last = s.rfind("}")
-        if first != -1 and last != -1 and last > first:
-            candidate2 = s[first : last + 1]
-            try:
-                obj2 = json.loads(candidate2)
-            except json.JSONDecodeError:
-                obj2 = None
-            if isinstance(obj2, dict):
-                return cast(dict[str, Any], obj2)
-
-        # Attempt to decode the first JSON object even when extra data follows (e.g., duplicate payloads)
-        decoder = json.JSONDecoder()
-        stripped = s.lstrip()
-        try:
-            obj3, _ = decoder.raw_decode(stripped)
-            if isinstance(obj3, dict):
-                return cast(dict[str, Any], obj3)
-        except json.JSONDecodeError:
-            brace_idx = stripped.find("{")
-            if brace_idx > 0:
-                try:
-                    obj4, _ = decoder.raw_decode(stripped[brace_idx:])
-                    if isinstance(obj4, dict):
-                        return cast(dict[str, Any], obj4)
-                except json.JSONDecodeError:
-                    pass
-
-        # Final attempt: strip dangling fences and parse whole string
-        s2 = re.sub(r"^```.*?$|```$", "", s, flags=re.MULTILINE).strip()
-        obj3 = json.loads(s2)
-        if not isinstance(obj3, dict):
-            raise json.JSONDecodeError("Top-level JSON is not an object", s2, 0)
-        return cast(dict[str, Any], obj3)
-
     def _handle_stream_event(
         self,
         event: object,
@@ -454,7 +379,6 @@ class CodexClient:
         agent_message_state: dict[str, str],
     ) -> dict[str, Any]:
         state: dict[str, Any] = {
-            "last_msg": None,
             "agent_message": None,
             "printed": False,
             "task_complete": False,
@@ -507,7 +431,6 @@ class CodexClient:
                 delta = ""
         agent_message_state[item_id] = text_obj
 
-        state["last_msg"] = text_obj
         state["agent_message"] = text_obj
         if delta:
             buf_parts.append(delta)

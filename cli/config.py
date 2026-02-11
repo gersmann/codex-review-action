@@ -18,8 +18,6 @@ _CONFIG_OVERRIDE_KEYS = frozenset(
         "model_provider",
         "model_name",
         "reasoning_effort",
-        "fast_model_name",
-        "fast_reasoning_effort",
         "act_instructions",
         "debug_level",
         "stream_output",
@@ -47,9 +45,6 @@ class ReviewConfig:
     model_provider: str = "openai"
     model_name: str = "gpt-5"
     reasoning_effort: str = "medium"
-    # Fast model for deduplication on repeated runs (review mode only)
-    fast_model_name: str = "gpt-5-mini"
-    fast_reasoning_effort: str = "low"
 
     # Act mode configuration
     act_instructions: str = ""
@@ -91,8 +86,6 @@ class ReviewConfig:
         model_provider = os.environ.get("CODEX_PROVIDER", "openai").strip()
         model_name = os.environ.get("CODEX_MODEL", "gpt-5").strip()
         reasoning_effort = os.environ.get("CODEX_REASONING_EFFORT", "medium").strip()
-        fast_model_name = os.environ.get("CODEX_FAST_MODEL", model_name).strip()
-        fast_reasoning_effort = os.environ.get("CODEX_FAST_REASONING_EFFORT", "low").strip()
 
         # Act mode configuration
         act_instructions = os.environ.get("CODEX_ACT_INSTRUCTIONS", "").strip()
@@ -125,8 +118,6 @@ class ReviewConfig:
             model_provider=model_provider,
             model_name=model_name,
             reasoning_effort=reasoning_effort,
-            fast_model_name=fast_model_name,
-            fast_reasoning_effort=fast_reasoning_effort,
             act_instructions=act_instructions,
             debug_level=debug_level,
             stream_output=stream_output,

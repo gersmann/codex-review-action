@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import json
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -100,65 +99,3 @@ def prefilter_duplicates_by_location(
             filtered.append(finding)
 
     return filtered
-
-
-def deduplicate_findings(
-    findings: list[dict[str, Any]],
-    existing_comments: list[str],
-    *,
-    execute_codex: Callable[..., str],
-    parse_json_response: Callable[[str], dict[str, Any]],
-    fast_model_name: str,
-    fast_reasoning_effort: str,
-) -> list[dict[str, Any]]:
-    """Use the fast model to filter findings already covered by existing comments."""
-    compact_findings: list[dict[str, Any]] = []
-    for idx, finding in enumerate(findings):
-        location = FindingLocation.from_finding(finding)
-        compact_findings.append(
-            {
-                "index": idx,
-                "title": str(finding.get("title", "")),
-                "body": str(finding.get("body", "")),
-                "path": location.absolute_file_path,
-                "start": location.start_line,
-            }
-        )
-
-    instructions = (
-        "You are deduplicating review comments.\n"
-        'Given `new_findings` and `existing_comments`, return JSON {"keep": [indices]} where indices refer to new_findings[index].\n'
-        "Consider a new finding a duplicate if an existing comment already conveys the same issue for the same file and nearby lines,\n"
-        "or if it is semantically redundant. Prefer recall (keep) when unsure.\n"
-    )
-    payload = {
-        "new_findings": compact_findings,
-        "existing_comments": existing_comments[:200],
-    }
-    prompt = (
-        instructions
-        + "\n\nINPUT:\n"
-        + json.dumps(payload, ensure_ascii=False)
-        + "\n\nOUTPUT: JSON with only the 'keep' array."
-    )
-
-    try:
-        raw = execute_codex(
-            prompt,
-            model_name=fast_model_name,
-            reasoning_effort=fast_reasoning_effort,
-            suppress_stream=True,
-            sandbox_mode="danger-full-access",
-        )
-        data = parse_json_response(raw)
-        keep_raw = data.get("keep")
-        if not isinstance(keep_raw, list):
-            return findings
-        keep_set = {
-            int(idx)
-            for idx in keep_raw
-            if isinstance(idx, int) or (isinstance(idx, str) and str(idx).isdigit())
-        }
-        return [finding for i, finding in enumerate(findings) if i in keep_set]
-    except Exception:
-        return findings
