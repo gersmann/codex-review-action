@@ -97,8 +97,6 @@ jobs:
 | `model` | Model name | `gpt-5.1-codex-max` |
 | `reasoning_effort` | `minimal` / `low` / `medium` / `high` | `medium` |
 | **Review-only** | | |
-| `fast_model` | Model for dedup on repeated runs | `gpt-5-mini` |
-| `fast_reasoning_effort` | Reasoning effort for dedup model | `low` |
 | `additional_prompt` | Extra reviewer instructions (verbatim) | |
 | **Act-only** | | |
 | `act_instructions` | Extra guidance appended to the edit prompt | |
@@ -107,7 +105,7 @@ jobs:
 | `debug_level` | `0` (off) / `1` (basic) / `2` (trace) | `1` |
 | `stream_agent_messages` | `0` or `1` — stream model output to logs | `1` |
 | **Advanced** | | |
-| `codex_python_version` | `codex-python` version spec | `==1.0.0b3` |
+| `codex_python_version` | `codex-python` version spec | `==1.0.1` |
 | `extra_pip_args` | Additional pip flags (e.g., `--index-url`) | |
 
 ## What It Posts
@@ -118,12 +116,10 @@ jobs:
 
 ## Deduplication on Repeated Runs
 
-When a prior Codex review exists on the PR, findings go through two dedup layers:
+When a prior Codex review exists on the PR, findings are deduplicated in two ways:
 
-1. **Location prefilter** — drops any finding if an inline comment already exists on the same file within a few lines.
-2. **Semantic dedup** — uses the fast model to filter findings that are semantically redundant with existing comments.
-
-Configure via `fast_model` and `fast_reasoning_effort`.
+1. **Inline semantic dedup** — existing review comments are passed to the model's structured-output turn so it can exclude redundant findings at generation time.
+2. **Location prefilter** — a cheap post-hoc safety net that drops any finding if an inline comment already exists on the same file within a few lines.
 
 ## Security & Permissions
 

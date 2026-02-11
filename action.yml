@@ -33,14 +33,6 @@ inputs:
     description: "If '1', stream model output to logs"
     required: false
     default: "1"
-  fast_model:
-    description: "Fast model for deduplication on repeated runs (review mode only)"
-    required: false
-    default: "gpt-5-mini"
-  fast_reasoning_effort:
-    description: "Fast reasoning effort (review mode only): minimal | low | medium | high"
-    required: false
-    default: "low"
   act_instructions:
     description: "Additional instructions for act mode (autonomous editing)"
     required: false
@@ -52,7 +44,7 @@ inputs:
   codex_python_version:
     description: "Version spec for codex-python on PyPI (e.g., '==1.0.0')"
     required: false
-    default: "==1.0.0"
+    default: "==1.0.1"
   extra_pip_args:
     description: "Additional pip arguments (e.g., --index-url)"
     required: false
@@ -73,9 +65,6 @@ runs:
         # Reasoning efforts
         if ! contains_word "$valid_efforts" "${{ inputs.reasoning_effort }}"; then
           echo "::error::Invalid reasoning_effort: ${{ inputs.reasoning_effort }} (allowed: minimal|low|medium|high)"; exit 2;
-        fi
-        if ! contains_word "$valid_efforts" "${{ inputs.fast_reasoning_effort }}"; then
-          echo "::error::Invalid fast_reasoning_effort: ${{ inputs.fast_reasoning_effort }} (allowed: minimal|low|medium|high)"; exit 2;
         fi
         # SDK compatibility (this action expects codex-python 1.x API)
         if echo "$codex_version_spec" | grep -Eq '(^|[<>=~! ,])(0\.|2\.)'; then
@@ -103,8 +92,6 @@ runs:
         CODEX_MODE: ${{ inputs.mode }}
         CODEX_MODEL: ${{ inputs.model }}
         CODEX_REASONING_EFFORT: ${{ inputs.reasoning_effort }}
-        CODEX_FAST_MODEL: ${{ inputs.fast_model }}
-        CODEX_FAST_REASONING_EFFORT: ${{ inputs.fast_reasoning_effort }}
         CODEX_ACT_INSTRUCTIONS: ${{ inputs.act_instructions }}
         CODEX_ADDITIONAL_PROMPT: ${{ inputs.additional_prompt }}
         DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
