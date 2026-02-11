@@ -27,7 +27,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Codex autonomous review
-        uses: gersmann/codex-review-action@next
+        uses: gersmann/codex-review-action@latest
         with:
           mode: review
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
