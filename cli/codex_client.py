@@ -4,10 +4,10 @@ import json
 import os
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, cast
 
-from codex import Codex, CodexOptions, ThreadOptions
+from codex import Codex, CodexOptions, ThreadOptions, TurnOptions
 from codex.errors import CodexParseError, ThreadRunError
 
 from .config import ReviewConfig, make_debug
@@ -15,8 +15,6 @@ from .exceptions import CodexExecutionError
 
 _REASONING_EFFORT_VALUES = {"minimal", "low", "medium", "high", "xhigh"}
 _SANDBOX_MODE_VALUES = {"read-only", "workspace-write", "danger-full-access"}
-_WEB_SEARCH_MODE_VALUES = {"disabled", "cached", "live"}
-_APPROVAL_POLICY_VALUES = {"never", "on-request", "on-failure", "untrusted"}
 
 
 def _as_int_or_none(value: object) -> int | None:
@@ -221,130 +219,6 @@ class CodexClient:
         self._debug(1, f"Invalid sandbox mode '{value}', falling back to '{default}'")
         return default
 
-    def _normalize_web_search_mode(self, value: object, default: str) -> str:
-        if not isinstance(value, str):
-            return default
-        normalized = value.strip().lower().replace("_", "-")
-        if normalized in _WEB_SEARCH_MODE_VALUES:
-            return normalized
-        self._debug(1, f"Invalid web search mode '{value}', falling back to '{default}'")
-        return default
-
-    def _normalize_approval_policy(self, value: object, default: str) -> str:
-        if not isinstance(value, str):
-            return default
-        normalized = value.strip().lower().replace("_", "-")
-        if normalized in _APPROVAL_POLICY_VALUES:
-            return normalized
-        self._debug(1, f"Invalid approval policy '{value}', falling back to '{default}'")
-        return default
-
-    def _coerce_optional_bool(self, value: object) -> bool | None:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {"1", "true", "yes", "on"}:
-                return True
-            if normalized in {"0", "false", "no", "off"}:
-                return False
-        return None
-
-    def _coerce_optional_str(self, value: object) -> str | None:
-        if isinstance(value, str):
-            stripped = value.strip()
-            if stripped:
-                return stripped
-        return None
-
-    def _coerce_optional_str_list(self, value: object) -> list[str] | None:
-        if isinstance(value, str):
-            stripped = value.strip()
-            return [stripped] if stripped else None
-        if not isinstance(value, Sequence):
-            return None
-        out: list[str] = []
-        for item in value:
-            if isinstance(item, str):
-                stripped = item.strip()
-                if stripped:
-                    out.append(stripped)
-        return out or None
-
-    def _drop_nones(self, value: object) -> object:
-        if isinstance(value, dict):
-            out: dict[str, object] = {}
-            for k, v in value.items():
-                if v is None:
-                    continue
-                cleaned = self._drop_nones(v)
-                if cleaned is not None:
-                    out[k] = cleaned
-            return out
-        if isinstance(value, list):
-            out_list: list[object] = []
-            for item in value:
-                if item is None:
-                    continue
-                cleaned = self._drop_nones(item)
-                if cleaned is not None:
-                    out_list.append(cleaned)
-            return out_list
-        return value
-
-    def _build_thread_options(
-        self,
-        *,
-        model: str,
-        reasoning_effort: str,
-        overrides: dict[str, Any],
-    ) -> tuple[ThreadOptions, dict[str, Any]]:
-        effective = dict(overrides)
-        model_override = self._coerce_optional_str(effective.pop("model", None))
-        resolved_model = model_override or model
-
-        sandbox_mode = self._normalize_sandbox_mode(
-            effective.pop("sandbox_mode", "read-only"), "read-only"
-        )
-        resolved_reasoning_effort = self._normalize_reasoning_effort(
-            effective.pop("model_reasoning_effort", reasoning_effort),
-            reasoning_effort,
-        )
-        approval_policy = self._normalize_approval_policy(
-            effective.pop("approval_policy", "never"), "never"
-        )
-        web_search_mode = self._normalize_web_search_mode(
-            effective.pop("web_search_mode", "live"), "live"
-        )
-        web_search_enabled = self._coerce_optional_bool(effective.pop("web_search_enabled", None))
-        network_access_enabled = self._coerce_optional_bool(
-            effective.pop("network_access_enabled", None)
-        )
-        skip_git_repo_check = self._coerce_optional_bool(effective.pop("skip_git_repo_check", None))
-        working_directory = self._coerce_optional_str(effective.pop("working_directory", None))
-        additional_directories = self._coerce_optional_str_list(
-            effective.pop("additional_directories", None)
-        )
-
-        thread_options = ThreadOptions(
-            model=resolved_model,
-            sandbox_mode=cast(Any, sandbox_mode),
-            working_directory=working_directory,
-            skip_git_repo_check=bool(skip_git_repo_check)
-            if skip_git_repo_check is not None
-            else False,
-            model_reasoning_effort=cast(Any, resolved_reasoning_effort),
-            network_access_enabled=network_access_enabled,
-            web_search_mode=cast(Any, web_search_mode),
-            web_search_enabled=web_search_enabled,
-            approval_policy=cast(Any, approval_policy),
-            additional_directories=additional_directories,
-        )
-        cleaned_overrides = self._drop_nones(effective)
-        if not isinstance(cleaned_overrides, dict):
-            cleaned_overrides = {}
-        return thread_options, cast(dict[str, Any], cleaned_overrides)
-
     def _resolve_api_key(self) -> str | None:
         # Prefer explicit CODEX_API_KEY, fallback to OPENAI_API_KEY.
         codex_api_key = os.environ.get("CODEX_API_KEY")
@@ -360,57 +234,23 @@ class CodexClient:
                 return stripped
         return None
 
-    def execute(
+    def _consume_turn(
         self,
-        prompt: str,
+        stream: Any,
         *,
-        model_name: str | None = None,
-        reasoning_effort: str | None = None,
-        suppress_stream: bool = False,
-        config_overrides: dict[str, Any] | None = None,
-    ) -> str:
-        """Execute Codex with the given prompt and return the response.
+        stream_enabled: bool,
+        agent_message_state: dict[str, str],
+    ) -> tuple[str | None, bool]:
+        """Consume all events from a single turn.
 
-        model_name/reasoning_effort override the defaults for fast dedup passes.
-        When suppress_stream is True, do not print streamed tokens to stdout.
-        config_overrides: Additional config overrides to merge with defaults.
+        Returns (last_agent_message, parse_errors_seen).
         """
-        model = (model_name or self.config.model_name).strip()
-        effort = self._normalize_reasoning_effort(
-            reasoning_effort or self.config.reasoning_effort or "medium",
-            "medium",
-        )
-
-        base_overrides: dict[str, Any] = {
-            "include_plan_tool": True,
-            "include_view_image_tool": False,
-            "show_raw_agent_reasoning": False,
-        }
-        if config_overrides:
-            base_overrides.update(config_overrides)
-
-        thread_options, sdk_overrides = self._build_thread_options(
-            model=model,
-            reasoning_effort=effort,
-            overrides=base_overrides,
-        )
-
-        last_msg: str | None = None
         last_agent_message: str | None = None
         buf_parts: list[str] = []
-        stream_enabled = self._should_stream(suppress_stream)
         printed_any = False
         parse_errors_seen = False
-        agent_message_state: dict[str, str] = {}
+
         try:
-            client = Codex(
-                options=CodexOptions(
-                    config=cast(Any, sdk_overrides),
-                    api_key=self._resolve_api_key(),
-                )
-            )
-            thread = client.start_thread(thread_options)
-            stream = thread.run_streamed(prompt)
             for event in stream.events:
                 result = self._handle_stream_event(
                     event=event,
@@ -418,9 +258,6 @@ class CodexClient:
                     buf_parts=buf_parts,
                     agent_message_state=agent_message_state,
                 )
-                val = result.get("last_msg")
-                if isinstance(val, str) or val is None:
-                    last_msg = val
                 agent_msg = result.get("agent_message")
                 if isinstance(agent_msg, str):
                     last_agent_message = agent_msg
@@ -433,28 +270,108 @@ class CodexClient:
         except CodexParseError as parse_err:
             self._debug(1, f"[codex-event-parse-error] {parse_err}")
             parse_errors_seen = True
+
+        if last_agent_message:
+            return last_agent_message, parse_errors_seen
+
+        combined = "".join(buf_parts).strip()
+        if combined:
+            return combined, parse_errors_seen
+
+        return None, parse_errors_seen
+
+    def execute(
+        self,
+        prompt: str,
+        *,
+        model_name: str | None = None,
+        reasoning_effort: str | None = None,
+        suppress_stream: bool = False,
+        sandbox_mode: str = "read-only",
+        output_schema: dict[str, object] | None = None,
+        schema_prompt: str = "Produce the JSON output now.",
+    ) -> str:
+        """Execute Codex with the given prompt and return the response.
+
+        model_name/reasoning_effort override the defaults for fast dedup passes.
+        When suppress_stream is True, do not print streamed tokens to stdout.
+        sandbox_mode: Codex sandbox policy (read-only, workspace-write, danger-full-access).
+        output_schema: JSON Schema dict for structured output. When set, runs two
+            turns: turn 1 executes the prompt (agentic tool use), turn 2 applies
+            the schema to get guaranteed structured JSON.
+        schema_prompt: Prompt for turn 2 when output_schema is set.
+        """
+        model = (model_name or self.config.model_name).strip()
+        effort = self._normalize_reasoning_effort(
+            reasoning_effort or self.config.reasoning_effort or "medium",
+            "medium",
+        )
+
+        thread_options = ThreadOptions(
+            model=model,
+            sandbox_mode=cast(Any, self._normalize_sandbox_mode(sandbox_mode, "read-only")),
+            model_reasoning_effort=cast(Any, effort),
+        )
+
+        stream_enabled = self._should_stream(suppress_stream)
+        agent_message_state: dict[str, str] = {}
+
+        try:
+            client = Codex(
+                options=CodexOptions(
+                    config={"show_raw_agent_reasoning": False},
+                    api_key=self._resolve_api_key(),
+                )
+            )
+            thread = client.start_thread(thread_options)
+
+            if output_schema:
+                # Turn 1: agentic work (tool use, file reads, git diff)
+                stream1 = thread.run_streamed(prompt)
+                self._consume_turn(
+                    stream1,
+                    stream_enabled=stream_enabled,
+                    agent_message_state=agent_message_state,
+                )
+
+                # Turn 2: structured output with schema enforcement
+                turn_opts = TurnOptions(output_schema=output_schema)
+                stream2 = thread.run_streamed(
+                    schema_prompt,
+                    turn_options=turn_opts,
+                )
+                result, _ = self._consume_turn(
+                    stream2,
+                    stream_enabled=False,
+                    agent_message_state=agent_message_state,
+                )
+                if result:
+                    return result
+                raise CodexExecutionError("Codex did not return structured output on turn 2.")
+            else:
+                # Single-turn execution
+                stream = thread.run_streamed(prompt)
+                result, parse_errors_seen = self._consume_turn(
+                    stream,
+                    stream_enabled=stream_enabled,
+                    agent_message_state=agent_message_state,
+                )
+                if result:
+                    return result
+                if parse_errors_seen:
+                    self._debug(
+                        1,
+                        "[codex-event] no agent message; returning empty due to parse errors",
+                    )
+                    return ""
+                raise CodexExecutionError("Codex did not return an agent message.")
+
         except ThreadRunError as run_err:
             raise CodexExecutionError(f"Codex execution failed: {run_err}") from run_err
         except CodexExecutionError:
             raise
         except Exception as e:
             raise CodexExecutionError(f"Codex execution failed: {e}") from e
-
-        if last_agent_message:
-            return last_agent_message
-
-        if last_msg:
-            return last_msg
-
-        combined = "".join(buf_parts).strip()
-        if combined:
-            return combined
-        if parse_errors_seen:
-            # Be permissive: return empty output so callers can still proceed
-            # (e.g., check git changes) rather than failing the whole run.
-            self._debug(1, "[codex-event] no agent message; returning empty due to parse errors")
-            return ""
-        raise CodexExecutionError("Codex did not return an agent message.")
 
     def parse_json_response(self, text: str) -> dict[str, Any]:
         """Parse a JSON object from model output that may include fences or extra text.

@@ -244,7 +244,7 @@ def main() -> int:
         if config.mode == "act":
             if not config.pr_number:
                 raise ConfigurationError("--pr is required in act mode")
-            if not (config.act_instructions or "").strip():
+            if not config.act_instructions.strip():
                 raise ConfigurationError("--act-instructions is required in act mode")
 
             edit_workflow = EditWorkflow(config)

@@ -87,10 +87,8 @@ class EditWorkflow:
             normalized_comment_ctx,
             unresolved_block,
         )
-        overrides = self._build_edit_overrides()
-
         try:
-            agent_output = self.codex_client.execute(prompt, config_overrides=overrides)
+            agent_output = self.codex_client.execute(prompt, sandbox_mode="danger-full-access")
         except Exception as exc:
             print(f"Edit execution failed: {exc}", file=sys.stderr)
             self._safe_reply(pr, normalized_comment_ctx, f"Edit failed: {exc}")
@@ -239,17 +237,6 @@ class EditWorkflow:
             )
         )
         return has_verb and has_noun
-
-    def _build_edit_overrides(self) -> dict[str, Any]:
-        return {
-            "include_plan_tool": True,
-            "base_instructions": (
-                "You are in ACT mode and MUST make the requested code changes. "
-                "Use the apply_patch tool to edit files; keep diffs minimal and focused. "
-                "Use <comment_context> (path/line/diff) and <file_excerpt> to locate the change precisely."
-            ),
-            "sandbox_mode": "danger-full-access",
-        }
 
     def _format_edit_reply(
         self,

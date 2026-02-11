@@ -87,7 +87,8 @@ def format_unresolved_threads_from_list(threads: list[dict[str, Any]]) -> str:
                     author = str(author_value) if author_value else ""
                 path = str(comment.get("path") or "")
                 line = comment.get("line") or comment.get("original_line") or ""
-                body = str(comment.get("body") or "").strip()
+                body_raw = comment.get("body")
+                body = body_raw.strip() if isinstance(body_raw, str) else ""
                 entry_lines.append(
                     f'<comment id="{comment_id}" author="{author}" path="{path}" line="{line}">\n{body}\n</comment>'
                 )

@@ -23,7 +23,7 @@ class _FakeThread:
         self._events = events
         self.calls: list[_RunCall] = []
 
-    def run_streamed(self, prompt: str) -> Any:
+    def run_streamed(self, prompt: str, **kwargs: Any) -> Any:
         self.calls.append(_RunCall(prompt=prompt))
         return SimpleNamespace(events=self._events)
 
@@ -77,13 +77,13 @@ def test_execute_streams_agent_message_from_item_updates(monkeypatch: pytest.Mon
     monkeypatch.setattr("cli.codex_client.Codex", _FakeCodex)
     client = CodexClient(_make_config())
 
-    output = client.execute("prompt", config_overrides={"sandbox_mode": "danger-full-access"})
+    output = client.execute("prompt", sandbox_mode="danger-full-access")
 
     assert output == "Hello"
     assert _FakeCodex.thread.calls[0].prompt == "prompt"
     assert _FakeCodex.last_thread_options.sandbox_mode == "danger-full-access"
     assert _FakeCodex.last_thread_options.model_reasoning_effort == "medium"
-    assert _FakeCodex.last_options.config["include_plan_tool"] is True
+    assert _FakeCodex.last_options.config["show_raw_agent_reasoning"] is False
 
 
 def test_execute_raises_on_turn_failed(monkeypatch: pytest.MonkeyPatch) -> None:
