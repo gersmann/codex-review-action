@@ -1,11 +1,34 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+import sys
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from .exceptions import ConfigurationError
+
+_CONFIG_OVERRIDE_KEYS = frozenset(
+    {
+        "github_token",
+        "repository",
+        "pr_number",
+        "mode",
+        "model_provider",
+        "model_name",
+        "reasoning_effort",
+        "fast_model_name",
+        "fast_reasoning_effort",
+        "act_instructions",
+        "debug_level",
+        "stream_output",
+        "dry_run",
+        "additional_prompt",
+        "repo_root",
+        "context_dir_name",
+    }
+)
 
 
 @dataclass
@@ -77,8 +100,12 @@ class ReviewConfig:
 
         # Validate model authentication
         if model_provider == "openai":
-            if not os.environ.get("OPENAI_API_KEY"):
-                raise ConfigurationError("Missing OPENAI_API_KEY for model provider 'openai'")
+            has_openai_key = bool(os.environ.get("OPENAI_API_KEY"))
+            has_codex_key = bool(os.environ.get("CODEX_API_KEY"))
+            if not has_openai_key and not has_codex_key:
+                raise ConfigurationError(
+                    "Missing OPENAI_API_KEY or CODEX_API_KEY for model provider 'openai'"
+                )
 
         # Output configuration
         debug_level = _parse_debug_level(os.environ.get("DEBUG_CODEREVIEW", "0"))
@@ -118,12 +145,26 @@ class ReviewConfig:
             # If environment config fails, create minimal config
             config = cls(github_token="", repository="")
 
-        # Override with provided arguments
-        for key, value in kwargs.items():
-            if hasattr(config, key) and value is not None:
-                setattr(config, key, value)
+        unknown = sorted(
+            key
+            for key, value in kwargs.items()
+            if value is not None and key not in _CONFIG_OVERRIDE_KEYS
+        )
+        if unknown:
+            joined = ", ".join(unknown)
+            raise ConfigurationError(f"Unknown configuration arguments: {joined}")
 
-        return config
+        values = asdict(config)
+        for key in _CONFIG_OVERRIDE_KEYS:
+            value = kwargs.get(key)
+            if value is not None:
+                values[key] = value
+
+        repo_root = values.get("repo_root")
+        if isinstance(repo_root, str):
+            values["repo_root"] = Path(repo_root).resolve()
+
+        return cls(**values)
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -142,6 +183,40 @@ class ReviewConfig:
         if self.debug_level < 0:
             raise ConfigurationError("Debug level must be non-negative")
 
+        if self.model_provider == "openai":
+            has_openai_key = bool(os.environ.get("OPENAI_API_KEY"))
+            has_codex_key = bool(os.environ.get("CODEX_API_KEY"))
+            if not has_openai_key and not has_codex_key:
+                raise ConfigurationError(
+                    "Missing OPENAI_API_KEY or CODEX_API_KEY for model provider 'openai'"
+                )
+
+    @staticmethod
+    def extract_pr_number_from_event(event: Mapping[str, Any]) -> int | None:
+        """Extract PR number from a GitHub event payload."""
+        pull_request = event.get("pull_request")
+        if isinstance(pull_request, Mapping):
+            number = pull_request.get("number")
+            if isinstance(number, (int, float, str, bytes, bytearray)):
+                try:
+                    parsed = int(number)
+                    return parsed if parsed > 0 else None
+                except (TypeError, ValueError):
+                    return None
+            return None
+
+        issue = event.get("issue")
+        if isinstance(issue, Mapping) and issue.get("pull_request"):
+            number = issue.get("number")
+            if isinstance(number, (int, float, str, bytes, bytearray)):
+                try:
+                    parsed = int(number)
+                    return parsed if parsed > 0 else None
+                except (TypeError, ValueError):
+                    return None
+            return None
+        return None
+
     @property
     def owner(self) -> str:
         """Extract owner from repository string."""
@@ -151,6 +226,17 @@ class ReviewConfig:
     def repo_name(self) -> str:
         """Extract repository name from repository string."""
         return self.repository.split("/", 1)[1]
+
+
+def make_debug(config: ReviewConfig) -> Callable[[int, str], None]:
+    """Create a debug logging callback bound to a config's debug_level."""
+    level = config.debug_level
+
+    def _debug(min_level: int, message: str) -> None:
+        if level >= min_level:
+            print(f"[debug{min_level}] {message}", file=sys.stderr)
+
+    return _debug
 
 
 def _parse_debug_level(value: str) -> int:

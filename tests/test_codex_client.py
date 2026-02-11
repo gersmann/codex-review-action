@@ -41,11 +41,12 @@ class _FakeCodex:
         return _FakeCodex.thread
 
 
-def _make_config() -> ReviewConfig:
+def _make_config(*, debug_level: int = 0) -> ReviewConfig:
     return ReviewConfig.from_args(
         github_token="token",
         repository="o/r",
         stream_output=False,
+        debug_level=debug_level,
     )
 
 
@@ -141,3 +142,54 @@ def test_execute_falls_back_to_medium_reasoning_effort(monkeypatch: pytest.Monke
 
     assert output == "ok"
     assert _FakeCodex.last_thread_options.model_reasoning_effort == "medium"
+
+
+def test_debug_level1_logs_turn_completed_summary(capsys: pytest.CaptureFixture[str]) -> None:
+    client = CodexClient(_make_config(debug_level=1))
+    client._emit_debug_event(
+        None,
+        {
+            "type": "turn.completed",
+            "usage": {"input_tokens": 7, "cached_input_tokens": 2, "output_tokens": 3},
+        },
+    )
+
+    err = capsys.readouterr().err
+    assert "turn.completed usage in=7 cached=2 out=3" in err
+
+
+def test_debug_level1_logs_non_agent_item_update_summary(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = CodexClient(_make_config(debug_level=1))
+    client._emit_debug_event(
+        None,
+        {
+            "type": "item.updated",
+            "item": {
+                "id": "cmd-1",
+                "type": "command_execution",
+                "status": "in_progress",
+                "command": "pytest -q",
+            },
+        },
+    )
+
+    err = capsys.readouterr().err
+    assert "item.updated command_execution#cmd-1 status=in_progress command=pytest -q" in err
+
+
+def test_debug_level1_suppresses_agent_message_updates(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = CodexClient(_make_config(debug_level=1))
+    client._emit_debug_event(
+        None,
+        {
+            "type": "item.updated",
+            "item": {"id": "msg-1", "type": "agent_message", "text": "hello"},
+        },
+    )
+
+    err = capsys.readouterr().err
+    assert err == ""

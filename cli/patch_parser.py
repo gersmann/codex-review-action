@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -140,3 +141,11 @@ def annotate_patch_with_line_numbers(patch: str) -> str:
             lines_out.append(raw)
 
     return "\n".join(lines_out)
+
+
+def to_relative_path(abs_path: str, repo_root: Path) -> str:
+    """Convert an absolute path to a relative path under repo_root."""
+    try:
+        return str(Path(abs_path).resolve().relative_to(repo_root))
+    except Exception:
+        return abs_path.lstrip("./")

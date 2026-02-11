@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from github.File import File
 from github.PullRequest import PullRequest
 
-from .config import ReviewConfig
+from .config import ReviewConfig, make_debug
 from .exceptions import PromptError
 
 
@@ -16,10 +15,7 @@ class PromptBuilder:
 
     def __init__(self, config: ReviewConfig) -> None:
         self.config = config
-
-    def _debug(self, level: int, message: str) -> None:
-        if self.config.debug_level >= level:
-            print(f"[debug{level}] {message}", file=sys.stderr)
+        self._debug = make_debug(config)
 
     def load_guidelines(self) -> str:
         """Load review guidelines from the built-in prompts/review.md file.
@@ -27,17 +23,18 @@ class PromptBuilder:
         Only used in review mode. Act mode doesn't use guidelines.
         """
         if self.config.mode != "review":
-            return ""  # Act mode doesn't use guidelines from this method
+            return ""
 
-        # Always use the built-in review prompt
         builtin_path = Path(__file__).resolve().parents[1] / "prompts" / "review.md"
 
         try:
             self._debug(1, f"Using built-in prompt: {builtin_path}")
             return builtin_path.read_text(encoding="utf-8")
-        except Exception as e:
-            self._debug(1, f"Failed reading built-in prompt file {builtin_path}: {e}")
-            raise PromptError(f"Failed to read built-in guidelines file {builtin_path}: {e}") from e
+        except Exception as exc:
+            self._debug(1, f"Failed reading built-in prompt file {builtin_path}: {exc}")
+            raise PromptError(
+                f"Failed to read built-in guidelines file {builtin_path}: {exc}"
+            ) from exc
 
     def compose_prompt(
         self,
@@ -60,7 +57,6 @@ class PromptBuilder:
             "</paths>\n"
         )
 
-        # Tighten line-selection guidance
         line_rules = (
             "<line_rules>\n"
             "- Always use HEAD (right side) line numbers for code_location.\n"
@@ -72,7 +68,6 @@ class PromptBuilder:
             "</line_rules>\n"
         )
 
-        # Provide lightweight change summary
         changed_list: list[str] = []
         for file in changed_files:
             filename = file.filename
@@ -87,7 +82,6 @@ class PromptBuilder:
             else "<changed_files>(none)</changed_files>\n"
         )
 
-        # Relative paths to context artifacts for the agent to inspect directly
         try:
             context_dir_rel = context_dir.relative_to(repo_root)
         except ValueError:

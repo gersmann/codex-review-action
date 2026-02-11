@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from cli.config import ReviewConfig
-from cli.review_processor import ReviewProcessor
+from cli.workflows.review_workflow import ReviewWorkflow
 
 
 class FakeRequester:
@@ -56,7 +56,7 @@ def make_config() -> ReviewConfig:
 
 def test_skips_summary_only_review_when_no_inline_comments(tmp_path: Path):
     config = make_config()
-    rp = ReviewProcessor(config)
+    rp = ReviewWorkflow(config)
 
     # No prior markers to avoid semantic dedup/model calls
     pr = FakePR(url="https://api.github.com/repos/o/r/pulls/1")
@@ -71,7 +71,6 @@ def test_skips_summary_only_review_when_no_inline_comments(tmp_path: Path):
     rp._post_results(
         result,
         changed_files=[],
-        repo=None,
         pr=cast(Any, pr),
         head_sha="deadbeef",
         rename_map={},
@@ -83,7 +82,7 @@ def test_skips_summary_only_review_when_no_inline_comments(tmp_path: Path):
 
 def test_creates_bundled_review_with_inline_comment(tmp_path: Path):
     config = make_config()
-    rp = ReviewProcessor(config)
+    rp = ReviewWorkflow(config)
 
     pr = FakePR(url="https://api.github.com/repos/o/r/pulls/2")
 
@@ -113,7 +112,6 @@ def test_creates_bundled_review_with_inline_comment(tmp_path: Path):
     rp._post_results(
         result,
         changed_files=cast(list[Any], changed_files),
-        repo=None,
         pr=cast(Any, pr),
         head_sha="cafebabe",
         rename_map={},

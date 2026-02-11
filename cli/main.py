@@ -10,9 +10,9 @@ from typing import Any
 
 try:
     from .config import ReviewConfig
-    from .edit_processor import EditProcessor
     from .exceptions import CodexReviewError, ConfigurationError
-    from .review_processor import ReviewProcessor
+    from .workflows.edit_workflow import EditWorkflow
+    from .workflows.review_workflow import ReviewWorkflow
 except ImportError:
     # Direct execution: add repo root to path and import as package
     import sys as _sys
@@ -20,9 +20,9 @@ except ImportError:
 
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
     from cli.config import ReviewConfig
-    from cli.edit_processor import EditProcessor
     from cli.exceptions import CodexReviewError, ConfigurationError
-    from cli.review_processor import ReviewProcessor
+    from cli.workflows.edit_workflow import EditWorkflow
+    from cli.workflows.review_workflow import ReviewWorkflow
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -206,11 +206,7 @@ def main() -> int:
         if args.github_actions or (not args.repository and os.environ.get("GITHUB_ACTIONS")):
             # GitHub Actions mode - support PR + comment-based events
             event = load_github_event()
-            pr_number = None
-            if isinstance(event.get("pull_request"), dict):
-                pr_number = int(event["pull_request"].get("number") or 0)
-            elif isinstance(event.get("issue"), dict) and event["issue"].get("pull_request"):
-                pr_number = int(event["issue"].get("number") or 0)
+            pr_number = ReviewConfig.extract_pr_number_from_event(event)
             if not pr_number:
                 raise ConfigurationError("This workflow must be triggered by a PR-related event")
 
@@ -228,8 +224,9 @@ def main() -> int:
                         "author": (event["comment"].get("user") or {}).get("login"),
                         "body": body,
                     }
-                    edit_processor = EditProcessor(config)
-                    return edit_processor.process_edit_command(cmd, pr_number, comment_ctx)
+                    edit_workflow = EditWorkflow(config)
+                    return edit_workflow.process_edit_command(cmd, pr_number, comment_ctx)
+                return 0
         else:
             # CLI mode - create config from args
             config_kwargs = {
@@ -250,14 +247,14 @@ def main() -> int:
             if not (config.act_instructions or "").strip():
                 raise ConfigurationError("--act-instructions is required in act mode")
 
-            edit_processor = EditProcessor(config)
-            return edit_processor.process_edit_command(
+            edit_workflow = EditWorkflow(config)
+            return edit_workflow.process_edit_command(
                 config.act_instructions, config.pr_number, comment_ctx=None
             )
         else:
             # Review mode (default)
-            processor = ReviewProcessor(config)
-            result = processor.process_review()
+            workflow = ReviewWorkflow(config)
+            result = workflow.process_review()
 
             # Print summary
             findings_count = len(result.get("findings", []))
