@@ -43,7 +43,8 @@ class FindingLocation:
         if not isinstance(loc, Mapping):
             return cls("", 0, 0)
 
-        abs_path = str(loc.get("absolute_file_path") or "").strip()
+        abs_path_raw = loc.get("absolute_file_path")
+        abs_path = abs_path_raw.strip() if isinstance(abs_path_raw, str) else ""
         rng = loc.get("line_range")
         if not isinstance(rng, Mapping):
             return cls(abs_path, 0, 0)
@@ -120,6 +121,60 @@ class ReviewRunResult:
             "overall_explanation": self.overall_explanation,
             "findings": self.findings,
         }
+
+
+REVIEW_OUTPUT_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                    "confidence_score": {"type": ["number", "null"]},
+                    "priority": {"type": ["integer", "null"]},
+                    "code_location": {
+                        "type": "object",
+                        "properties": {
+                            "absolute_file_path": {"type": "string"},
+                            "line_range": {
+                                "type": "object",
+                                "properties": {
+                                    "start": {"type": "integer"},
+                                    "end": {"type": "integer"},
+                                },
+                                "required": ["start", "end"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "required": ["absolute_file_path", "line_range"],
+                        "additionalProperties": False,
+                    },
+                },
+                "required": [
+                    "title",
+                    "body",
+                    "confidence_score",
+                    "priority",
+                    "code_location",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "overall_correctness": {"type": "string"},
+        "overall_explanation": {"type": "string"},
+        "overall_confidence_score": {"type": ["number", "null"]},
+    },
+    "required": [
+        "findings",
+        "overall_correctness",
+        "overall_explanation",
+        "overall_confidence_score",
+    ],
+    "additionalProperties": False,
+}
 
 
 def _as_int(value: Any, default: int) -> int:

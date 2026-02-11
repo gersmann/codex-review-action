@@ -13,12 +13,11 @@ from ..config import ReviewConfig, make_debug
 from ..context_manager import ContextManager
 from ..exceptions import CodexExecutionError
 from ..github_client import GitHubClient, GitHubClientProtocol
-from ..models import ReviewRunResult
+from ..models import REVIEW_OUTPUT_SCHEMA, ReviewRunResult
 from ..review.dedupe import (
     SUMMARY_MARKER,
     collect_existing_comment_texts,
     collect_existing_review_comments,
-    deduplicate_findings,
     has_prior_codex_review,
     prefilter_duplicates_by_location,
 )
@@ -81,14 +80,26 @@ class ReviewWorkflow:
         if guidelines_text:
             parts.append("\nReview guidelines:\n" + guidelines_text)
 
-        extra = (self.config.additional_prompt or "").strip()
-        if extra:
-            parts.append("\nAdditional instructions:\n" + extra)
-
         parts.append(
             "Use git commands as needed to inspect the diff between the PR head and the base branch."
         )
         return "\n".join(parts).strip()
+
+    def _build_schema_prompt(self, existing_comments: list[Any]) -> str:
+        """Build the turn-2 prompt for structured output, with optional dedup context."""
+        existing_texts = collect_existing_comment_texts(existing_comments)
+        if not existing_texts:
+            return "Produce the JSON review output now."
+
+        lines = ["<existing_review_comments>"]
+        for text in existing_texts[:200]:
+            lines.append(text)
+        lines.append("</existing_review_comments>")
+        lines.append(
+            "Produce the JSON review output now. "
+            "Exclude any findings that are semantically redundant with the existing review comments above."
+        )
+        return "\n".join(lines)
 
     def process_review(self, pr_number: int | None = None) -> dict[str, Any]:
         """Process a code review for the given pull request."""
@@ -129,50 +140,41 @@ class ReviewWorkflow:
         self.context_manager.write_context_artifacts(pr, repo_root, context_dir_name)
 
         guidelines = self.prompt_builder.load_guidelines()
-        prompt = self.prompt_builder.compose_prompt(changed_files, pr)
+        raw_prompt = self.prompt_builder.compose_prompt(changed_files, pr)
         base_instructions = self._build_review_base_instructions(guidelines)
+        prompt = base_instructions + "\n\n" + raw_prompt
 
         self._debug(2, f"Prompt length: {len(prompt)} chars")
-        print("Running Codex to generate review findings...", flush=True)
 
-        max_attempts = 3
-        last_error: json.JSONDecodeError | None = None
-        parsed_result: ReviewRunResult | None = None
-
-        for attempt in range(1, max_attempts + 1):
-            if attempt > 1:
-                self._debug(
-                    1,
-                    f"Retrying Codex due to invalid JSON (attempt {attempt}/{max_attempts})",
-                )
-
-            output = self.codex_client.execute(
-                prompt,
-                config_overrides={
-                    "base_instructions": base_instructions,
-                    "sandbox_mode": "danger-full-access",
-                },
-            )
-
-            try:
-                payload = self.codex_client.parse_json_response(output)
-                parsed_result = ReviewRunResult.from_payload(payload)
-                break
-            except json.JSONDecodeError as parse_err:
-                last_error = parse_err
-                if attempt == max_attempts:
-                    print("Model did not return valid JSON:")
-                    print(output)
-
-        if parsed_result is None:
-            raise CodexExecutionError(
-                f"JSON parsing error after {max_attempts} attempts: {last_error}"
-            ) from last_error
-
+        # Fetch existing comments before execute() so we can feed them
+        # into the structured-output turn for inline deduplication.
         review_comments_snapshot = list(pr.get_review_comments())
         issue_comments_snapshot = list(pr.get_issue_comments())
         reviews_snapshot = list(pr.get_reviews())
         had_prior_codex_review = has_prior_codex_review(reviews_snapshot, issue_comments_snapshot)
+
+        schema_prompt = self._build_schema_prompt(
+            review_comments_snapshot if had_prior_codex_review else [],
+        )
+
+        print("Running Codex to generate review findings...", flush=True)
+
+        output = self.codex_client.execute(
+            prompt,
+            sandbox_mode="danger-full-access",
+            output_schema=REVIEW_OUTPUT_SCHEMA,
+            schema_prompt=schema_prompt,
+        )
+
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError as parse_err:
+            self._debug(1, f"Structured output was not valid JSON: {parse_err}")
+            print("Model did not return valid JSON:")
+            print(output)
+            raise CodexExecutionError(f"JSON parsing error: {parse_err}") from parse_err
+
+        parsed_result = ReviewRunResult.from_payload(payload)
 
         summary = _build_review_summary(parsed_result)
         if not self.config.dry_run:
@@ -218,6 +220,7 @@ class ReviewWorkflow:
         if review_comments is None:
             review_comments = list(pr.get_review_comments())
 
+        # Location prefilter: cheap safety net after turn-2 semantic dedup.
         if should_dedupe:
             existing_struct = collect_existing_review_comments(review_comments)
             before_prefilter = len(findings)
@@ -233,18 +236,6 @@ class ReviewWorkflow:
                     "Prefilter dropped "
                     f"{dropped_prefilter}/{before_prefilter} findings due to existing comments"
                 )
-
-            existing_texts = collect_existing_comment_texts(review_comments)
-            before_semantic = len(findings)
-            findings = deduplicate_findings(
-                findings,
-                existing_texts,
-                execute_codex=self.codex_client.execute,
-                parse_json_response=self.codex_client.parse_json_response,
-                fast_model_name=self.config.fast_model_name,
-                fast_reasoning_effort=self.config.fast_reasoning_effort,
-            )
-            print(f"Dedup kept {len(findings)}/{before_semantic} findings (fast model)")
 
         file_maps = build_anchor_maps(changed_files)
         repo_root = self.config.repo_root or Path(".").resolve()
@@ -270,7 +261,8 @@ class ReviewWorkflow:
         """Delete prior Codex summary issue comments."""
         comments = list(pr.get_issue_comments())
         for comment in comments:
-            body = (comment.body or "").strip()
+            comment_body = comment.body
+            body = comment_body.strip() if isinstance(comment_body, str) else ""
             if SUMMARY_MARKER not in body:
                 continue
             try:

@@ -200,8 +200,10 @@ def git_format_called_process_error(exc: subprocess.CalledProcessError, max_line
     else:
         command_text = str(cmd)
 
-    stdout = (exc.stdout or "").strip()
-    stderr = (exc.stderr or "").strip()
+    stdout_text = exc.stdout if isinstance(exc.stdout, str) else ""
+    stderr_text = exc.stderr if isinstance(exc.stderr, str) else ""
+    stdout = stdout_text.strip()
+    stderr = stderr_text.strip()
     lines: list[str] = [f"command `{command_text}` exited with code {exc.returncode}"]
 
     if stderr:

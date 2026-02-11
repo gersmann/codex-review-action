@@ -43,3 +43,17 @@ def test_review_base_instructions_mark_repo_standard_as_authoritative() -> None:
 
     assert "REVIEW COMMENT FORMAT (REPO STANDARD)" in instructions
     assert "authoritative" in instructions
+
+
+def test_review_base_instructions_do_not_duplicate_additional_prompt() -> None:
+    config = _make_review_config()
+    config.additional_prompt = "Custom instruction"
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, object()),
+        codex_client=cast(Any, object()),
+    )
+
+    instructions = workflow._build_review_base_instructions("dummy")
+
+    assert "Custom instruction" not in instructions

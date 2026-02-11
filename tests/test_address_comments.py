@@ -156,7 +156,7 @@ def test_process_edit_command_skips_commit_when_no_agent_scoped_changes(monkeypa
             return None
 
     class _FakeCodexClient:
-        def execute(self, prompt: str, config_overrides=None) -> str:  # noqa: ARG002
+        def execute(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG002
             return "ok"
 
     before = GitWorktreeSnapshot(
@@ -217,7 +217,7 @@ def test_process_edit_command_commits_only_agent_scoped_paths(monkeypatch) -> No
             return None
 
     class _FakeCodexClient:
-        def execute(self, prompt: str, config_overrides=None) -> str:  # noqa: ARG002
+        def execute(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG002
             return "ok"
 
     before = GitWorktreeSnapshot(changed_paths=frozenset(), path_states={})
@@ -292,7 +292,7 @@ def test_process_edit_command_uses_force_with_lease_for_rewritten_history(monkey
             self.replies.append(text)
 
     class _FakeCodexClient:
-        def execute(self, prompt: str, config_overrides=None) -> str:  # noqa: ARG002
+        def execute(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG002
             return "ok"
 
     before = GitWorktreeSnapshot(changed_paths=frozenset(), path_states={})
@@ -370,7 +370,7 @@ def test_process_edit_command_fails_fast_for_active_rebase(monkeypatch) -> None:
             self.replies.append(text)
 
     class _FakeCodexClient:
-        def execute(self, prompt: str, config_overrides=None) -> str:  # noqa: ARG002
+        def execute(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG002
             return "ok"
 
     monkeypatch.setattr(
@@ -428,7 +428,7 @@ def test_process_edit_command_reports_force_with_lease_failures(monkeypatch) -> 
             self.replies.append(text)
 
     class _FakeCodexClient:
-        def execute(self, prompt: str, config_overrides=None) -> str:  # noqa: ARG002
+        def execute(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG002
             return "ok"
 
     before = GitWorktreeSnapshot(changed_paths=frozenset(), path_states={})

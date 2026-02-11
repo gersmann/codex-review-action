@@ -148,7 +148,7 @@ def deduplicate_findings(
             model_name=fast_model_name,
             reasoning_effort=fast_reasoning_effort,
             suppress_stream=True,
-            config_overrides={"sandbox_mode": "danger-full-access"},
+            sandbox_mode="danger-full-access",
         )
         data = parse_json_response(raw)
         keep_raw = data.get("keep")
