@@ -6,11 +6,11 @@ repos:
         name: ruff format --check
         args: ["--check"]
         pass_filenames: false
-        language_version: python3.12
+        language_version: python3.14
       - id: ruff
         name: ruff check
         pass_filenames: false
-        language_version: python3.12
+        language_version: python3.14
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.19.1
@@ -19,4 +19,4 @@ repos:
         name: mypy .
         args: ["--config-file=mypy.ini", "."]
         pass_filenames: false
-        language_version: python3.12
+        language_version: python3.14

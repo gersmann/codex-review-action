@@ -20,7 +20,7 @@ class CommentContext:
             return None
         try:
             comment_id = int(payload.get("id") or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             comment_id = 0
 
         event_name = str(payload.get("event_name") or "")
@@ -180,5 +180,5 @@ REVIEW_OUTPUT_SCHEMA: dict[str, object] = {
 def _as_int(value: Any, default: int) -> int:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
