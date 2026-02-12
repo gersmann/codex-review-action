@@ -4,12 +4,8 @@ name = "codex-review-action"
 version = "0.0.0"
 description = "GitHub Action for Codex autonomous PR reviews and edits"
 readme = "README.md"
-requires-python = ">=3.12"
-dependencies = [
-  "codex-python>=1.0.0b3,<2.0.0",
-  "pre-commit>=4.3.0",
-  "PyGithub",
-]
+requires-python = ">=3.14"
+dependencies = ["codex-python>=1.0.0b3,<2.0.0", "pre-commit>=4.3.0", "PyGithub"]
 
 [tool.uv]
 # Treat repo as non-packaged (no editable build performed by uv)
@@ -17,16 +13,11 @@ package = false
 # Do not pin uv version here; Python version is enforced by [project.requires-python]
 
 [dependency-groups]
-dev = [
-  "ruff",
-  "mypy",
-  "pytest",
-  "pre-commit",
-]
+dev = ["ruff", "mypy", "pytest", "pre-commit"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = [

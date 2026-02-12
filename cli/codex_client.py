@@ -20,7 +20,7 @@ def _as_int_or_none(value: object) -> int | None:
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

@@ -47,7 +47,7 @@ def parse_patch(patch: str) -> ParsedPatch:
             plus = next((t for t in parts if t.startswith("+")), "+0,0")
             try:
                 i_new = int(plus[1:].split(",")[0]) - 1
-            except (ValueError, IndexError):
+            except ValueError, IndexError:
                 i_new = 0
             continue
 
@@ -115,7 +115,7 @@ def annotate_patch_with_line_numbers(patch: str) -> str:
             try:
                 i_new = int(plus[1:].split(",")[0]) - 1
                 i_old = int(minus[1:].split(",")[0]) - 1
-            except (ValueError, IndexError):
+            except ValueError, IndexError:
                 i_new = i_old = 0
             lines_out.append(fmt(None, None, "@", raw))
             continue

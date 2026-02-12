@@ -202,7 +202,7 @@ class ReviewConfig:
                 try:
                     parsed = int(number)
                     return parsed if parsed > 0 else None
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     return None
             return None
 
@@ -213,7 +213,7 @@ class ReviewConfig:
                 try:
                     parsed = int(number)
                     return parsed if parsed > 0 else None
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     return None
             return None
         return None
@@ -244,5 +244,5 @@ def _parse_debug_level(value: str) -> int:
     """Parse debug level from string with fallback."""
     try:
         return int(value.strip() or "0")
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return 0
