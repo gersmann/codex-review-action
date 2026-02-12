@@ -187,7 +187,7 @@ def _extract_codex_finding_comment(thread: dict[str, Any]) -> _ThreadFindingComm
     if not isinstance(comments_value, list):
         return None
 
-    for comment in comments_value:
+    for comment in reversed(comments_value):
         if not isinstance(comment, dict):
             continue
 

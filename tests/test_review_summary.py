@@ -12,6 +12,7 @@ from cli.review.dedupe import (
 from cli.workflows.review_workflow import (
     ReviewWorkflow,
     _build_review_summary_with_open_counts,
+    _canonical_overall_correctness,
     _compute_effective_review_result,
 )
 
@@ -61,6 +62,22 @@ def test_collect_existing_comment_texts_from_threads_only_includes_codex_finding
     assert texts == ["[a.py:2] 🟡 [P2] handle edge case"]
 
 
+def test_summarize_open_codex_findings_prefers_latest_codex_comment_in_thread() -> None:
+    threads = [
+        {
+            "id": "1",
+            "comments": [
+                {"path": "a.py", "line": 10, "body": "🟡 [P2] older priority"},
+                {"path": "a.py", "line": 10, "body": "🔴 [P1] newer priority"},
+            ],
+        }
+    ]
+    stats = summarize_open_codex_findings(threads)
+    assert stats.total == 1
+    assert stats.p1 == 1
+    assert stats.p2 == 0
+
+
 def test_effective_result_marks_incorrect_for_open_blocking_findings() -> None:
     result = ReviewRunResult(
         overall_correctness="patch is correct",
@@ -84,6 +101,10 @@ def test_effective_result_keeps_correct_for_non_blocking_open_findings() -> None
 
     effective = _compute_effective_review_result(result, [], open_findings)
     assert effective.overall_correctness == "patch is correct"
+
+
+def test_canonical_overall_correctness_handles_trailing_period() -> None:
+    assert _canonical_overall_correctness("patch is incorrect.") == "patch is incorrect"
 
 
 def test_summary_includes_new_and_open_counts() -> None:

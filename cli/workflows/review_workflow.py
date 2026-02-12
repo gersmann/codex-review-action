@@ -83,7 +83,7 @@ def _build_review_summary_with_open_counts(
 def _canonical_overall_correctness(value: str) -> str:
     return (
         "patch is incorrect"
-        if value.strip().lower() == "patch is incorrect"
+        if value.strip().lower().rstrip(".") == "patch is incorrect"
         else "patch is correct"
     )
 
