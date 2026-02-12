@@ -85,6 +85,8 @@ When used via the composite action, the CLI runs in GitHub Actions mode automati
 
 Review posting behavior:
 - Codex posts a PR-level issue comment with a review summary.
+- The summary includes `Findings (new)` for this run and `Findings (open)` for unresolved Codex findings.
+- Open unresolved P0/P1 findings keep the summary verdict as `patch is incorrect` until they are resolved.
 - Findings are posted as standalone inline PR review comments on the relevant lines.
 
 Comment-triggered edits
@@ -124,8 +126,8 @@ pytest tests/ -v
 
 - The CLI detects if a prior Codex review exists on the PR (looks for a summary containing "Codex Autonomous Review:" or earlier inline review comments).
 - When detected, deduplication happens in two layers:
-  - **Inline semantic dedup**: existing review comments are passed to the model's structured-output turn (turn 2) so it can exclude redundant findings at generation time.
-  - **Location prefilter**: a post-hoc safety net that drops any new finding if an inline comment already exists on the same file within a few lines.
+  - **Inline semantic dedup**: unresolved Codex review-thread comments are passed to the model's structured-output turn (turn 2) so it can exclude redundant findings at generation time.
+  - **Location prefilter**: a post-hoc safety net that drops any new finding if an unresolved Codex finding already exists on the same file within a few lines.
 
 ### Customizing the Review Prompt
 

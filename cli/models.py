@@ -66,6 +66,35 @@ class ExistingReviewComment:
 
 
 @dataclass(frozen=True)
+class OpenCodexFindingsStats:
+    """Summary counters for unresolved Codex findings."""
+
+    total: int = 0
+    p0: int = 0
+    p1: int = 0
+    p2: int = 0
+    p3: int = 0
+    unknown: bool = False
+
+    @property
+    def blocking(self) -> int:
+        return self.p0 + self.p1
+
+    @property
+    def highest_priority(self) -> int | None:
+        if self.total <= 0:
+            return None
+        for priority, count in ((0, self.p0), (1, self.p1), (2, self.p2), (3, self.p3)):
+            if count > 0:
+                return priority
+        return None
+
+    @classmethod
+    def unknown_stats(cls) -> OpenCodexFindingsStats:
+        return cls(unknown=True)
+
+
+@dataclass(frozen=True)
 class InlineCommentPayload:
     """Payload for posting a GitHub inline review comment."""
 
