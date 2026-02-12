@@ -304,11 +304,15 @@ class CodexClient:
             reasoning_effort or self.config.reasoning_effort or "medium",
             "medium",
         )
+        web_search_mode = self.config.web_search_mode or "live"
+        web_search_enabled = web_search_mode != "disabled"
 
         thread_options = ThreadOptions(
             model=model,
             sandbox_mode=cast(Any, self._normalize_sandbox_mode(sandbox_mode, "read-only")),
             model_reasoning_effort=cast(Any, effort),
+            web_search_mode=cast(Any, web_search_mode),
+            web_search_enabled=web_search_enabled,
         )
 
         stream_enabled = self._should_stream(suppress_stream)

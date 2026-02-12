@@ -21,6 +21,10 @@ inputs:
     description: "Reasoning effort: minimal | low | medium | high"
     required: false
     default: "medium"
+  web_search_mode:
+    description: "Web search mode: disabled | cached | live"
+    required: false
+    default: "live"
   debug_level:
     description: "Debug verbosity: 0 (off), 1 (basic), 2 (trace)"
     required: false
@@ -58,6 +62,7 @@ runs:
       run: |
         set -euo pipefail
         valid_efforts="minimal low medium high"
+        valid_search_modes="disabled cached live"
         contains_word() { case " $1 " in *" $2 "*) return 0;; *) return 1;; esac; }
         codex_version_spec="${{ inputs.codex_python_version }}"
         # Mode
@@ -65,6 +70,10 @@ runs:
         # Reasoning efforts
         if ! contains_word "$valid_efforts" "${{ inputs.reasoning_effort }}"; then
           echo "::error::Invalid reasoning_effort: ${{ inputs.reasoning_effort }} (allowed: minimal|low|medium|high)"; exit 2;
+        fi
+        # Web search mode
+        if ! contains_word "$valid_search_modes" "${{ inputs.web_search_mode }}"; then
+          echo "::error::Invalid web_search_mode: ${{ inputs.web_search_mode }} (allowed: disabled|cached|live)"; exit 2;
         fi
         # SDK compatibility (this action expects codex-python 1.x API)
         if echo "$codex_version_spec" | grep -Eq '(^|[<>=~! ,])(0\.|2\.)'; then
@@ -92,6 +101,7 @@ runs:
         CODEX_MODE: ${{ inputs.mode }}
         CODEX_MODEL: ${{ inputs.model }}
         CODEX_REASONING_EFFORT: ${{ inputs.reasoning_effort }}
+        CODEX_WEB_SEARCH_MODE: ${{ inputs.web_search_mode }}
         CODEX_ACT_INSTRUCTIONS: ${{ inputs.act_instructions }}
         CODEX_ADDITIONAL_PROMPT: ${{ inputs.additional_prompt }}
         DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
