@@ -19,7 +19,7 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Codex autonomous review
@@ -62,7 +62,7 @@ jobs:
       && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
@@ -86,6 +86,7 @@ jobs:
 
 - **`/codex <instructions>`** — apply minimal diffs matching the instructions.
 - **`/codex address comments`** (or natural variants like "please fix the review comments") — address unresolved review threads. Only unresolved threads are considered; resolved threads are ignored.
+  If review-thread retrieval fails (for example due to API or permission issues), the action continues without unresolved-thread context and posts a warning.
 
 ## Inputs
 
@@ -112,14 +113,16 @@ jobs:
 
 - **Inline comments** anchored to exact diff lines. If a line isn't in the current diff, the finding is skipped.
 - **PR-level summary** as an issue comment on each run (refreshed on re-runs; prior summaries are deleted).
+  The summary reports both `Findings (new)` for this run and `Findings (open)` for unresolved Codex findings.
+  Open unresolved P0/P1 findings force the summary verdict to `patch is incorrect` until resolved.
 - **Multi-line suggestions** only when contiguous and short; otherwise a single-line comment.
 
 ## Deduplication on Repeated Runs
 
 When a prior Codex review exists on the PR, findings are deduplicated in two ways:
 
-1. **Inline semantic dedup** — existing review comments are passed to the model's structured-output turn so it can exclude redundant findings at generation time.
-2. **Location prefilter** — a cheap post-hoc safety net that drops any finding if an inline comment already exists on the same file within a few lines.
+1. **Inline semantic dedup** — unresolved Codex review-thread comments are passed to the model's structured-output turn so it can exclude redundant findings at generation time.
+2. **Location prefilter** — a cheap post-hoc safety net that drops any finding if an unresolved Codex finding already exists on the same file within a few lines.
 
 ## Security & Permissions
 
@@ -130,6 +133,7 @@ When a prior Codex review exists on the PR, findings are deduplicated in two way
 ## Troubleshooting
 
 - **422 Unprocessable Entity**: target line not in PR head diff. Rebase and re-run; set `debug_level: 2` to log anchors.
+- **Unresolved-thread context warning**: if review threads cannot be fetched, `/codex address comments` continues without thread context and logs/posts a warning so the edit run still executes.
 - **Model errors**: ensure your key supports the selected model.
 - Review uses built-in prompts (see `prompts/review.md`). Customize with `additional_prompt`.
 
