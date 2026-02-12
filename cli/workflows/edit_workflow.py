@@ -63,22 +63,28 @@ class EditWorkflow:
 
         unresolved_block = ""
         if self._wants_fix_unresolved(command_text):
+            fetch_failed = False
             try:
                 unresolved_threads = self.github_client.get_unresolved_threads(pr)
             except Exception as exc:
-                err = f"Failed to retrieve review threads: {exc}"
-                print(err, file=sys.stderr)
-                self._safe_reply(pr, normalized_comment_ctx, err)
-                return 1
+                fetch_failed = True
+                warning = (
+                    "Failed to retrieve review threads; continuing without unresolved-thread "
+                    f"context: {exc}"
+                )
+                print(warning, file=sys.stderr)
+                self._safe_reply(pr, normalized_comment_ctx, warning)
+                unresolved_threads = []
 
             self._debug(1, f"Unresolved threads found: {len(unresolved_threads)}")
-            if not unresolved_threads:
+            if not fetch_failed and not unresolved_threads:
                 msg = "No unresolved review threads detected; nothing to address."
                 print(msg)
                 self._safe_reply(pr, normalized_comment_ctx, msg)
                 return 0
 
-            unresolved_block = format_unresolved_threads_from_list(unresolved_threads)
+            if unresolved_threads:
+                unresolved_block = format_unresolved_threads_from_list(unresolved_threads)
 
         prompt = build_edit_prompt(
             self.config,
@@ -87,6 +93,7 @@ class EditWorkflow:
             normalized_comment_ctx,
             unresolved_block,
         )
+        self._debug(1, f"Final Edit Prompt:\n{prompt}")
         try:
             agent_output = self.codex_client.execute(prompt, sandbox_mode="danger-full-access")
         except Exception as exc:

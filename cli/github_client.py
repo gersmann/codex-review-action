@@ -30,13 +30,6 @@ def post_pr_resource(pr: Any, url_suffix: str, body: dict[str, Any]) -> Any:
     return pr._requester.requestJsonAndCheck("POST", url, input=body)
 
 
-def _get_pr_resource(pr: Any, url_suffix: str) -> Any:
-    """GET a PR sub-resource via PyGithub's internal requester."""
-    url = f"{pr.url}/{url_suffix}"
-    _, data = pr._requester.requestJsonAndCheck("GET", url)
-    return data
-
-
 class GitHubClient:
     """Concrete GitHub client wrapper used by workflows."""
 
@@ -69,25 +62,170 @@ class GitHubClient:
 
 
 def get_unresolved_threads(pr: Any) -> list[dict[str, Any]]:
-    """Fetch unresolved review threads for a PR."""
+    """Fetch unresolved review threads for a PR via GraphQL."""
+    owner, repo_name, pr_number = _resolve_pr_identity(pr)
+    threads: list[dict[str, Any]] = []
+    cursor: str | None = None
+
+    while True:
+        variables: dict[str, str | int | None] = {
+            "owner": owner,
+            "name": repo_name,
+            "number": pr_number,
+            "after": cursor,
+        }
+        try:
+            _, raw = pr._requester.graphql_query(_REVIEW_THREADS_QUERY, variables)
+        except Exception as exc:
+            target = f"{owner}/{repo_name}#{pr_number}"
+            raise RuntimeError(f"fetch error for reviewThreads on {target}: {exc}") from exc
+
+        page_nodes, has_next_page, end_cursor = _extract_review_threads_page(raw)
+        for node in page_nodes:
+            if _is_thread_resolved(node):
+                continue
+            threads.append(_normalize_thread(node))
+
+        if not has_next_page:
+            break
+
+        if not end_cursor:
+            raise RuntimeError("missing endCursor for paginated reviewThreads response")
+        cursor = end_cursor
+
+    return threads
+
+
+_REVIEW_THREADS_QUERY = """
+query ReviewThreads($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        nodes {
+          id
+          isResolved
+          comments(first: 100) {
+            nodes {
+              id
+              body
+              path
+              line
+              originalLine
+              author {
+                login
+              }
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _resolve_pr_identity(pr: Any) -> tuple[str, str, int]:
     try:
-        data = _get_pr_resource(pr, "threads")
+        owner_value = pr.base.repo.owner.login
+        repo_name_value = pr.base.repo.name
+        pr_number_value = pr.number
     except Exception as exc:
-        raise RuntimeError(f"fetch error for {pr.url}/threads: {exc}") from exc
+        raise RuntimeError("missing PR identity for GraphQL reviewThreads query") from exc
 
-    if not isinstance(data, list):
-        raise RuntimeError("unexpected /threads response type (expected list)")
+    owner = owner_value if isinstance(owner_value, str) else ""
+    repo_name = repo_name_value if isinstance(repo_name_value, str) else ""
+    if not isinstance(pr_number_value, int):
+        raise RuntimeError("invalid PR number for GraphQL reviewThreads query")
+    if not owner or not repo_name:
+        raise RuntimeError("missing owner/repo identity for GraphQL reviewThreads query")
+    return owner, repo_name, pr_number_value
 
-    def is_resolved(thread: dict[str, Any]) -> bool:
-        state = str(thread.get("state") or thread.get("resolution") or "").lower()
-        return bool(
-            thread.get("resolved")
-            or thread.get("is_resolved")
-            or thread.get("isResolved")
-            or state in {"resolved", "completed", "dismissed"}
-        )
 
-    return [thread for thread in data if not is_resolved(thread)]
+def _extract_review_threads_page(raw: Any) -> tuple[list[dict[str, Any]], bool, str | None]:
+    if not isinstance(raw, dict):
+        raise RuntimeError("unexpected GraphQL response type for reviewThreads")
+
+    data = raw.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("GraphQL response missing data object")
+
+    repository = data.get("repository")
+    if not isinstance(repository, dict):
+        raise RuntimeError("GraphQL response missing repository object")
+
+    pull_request = repository.get("pullRequest")
+    if not isinstance(pull_request, dict):
+        raise RuntimeError("GraphQL response missing pullRequest object")
+
+    review_threads = pull_request.get("reviewThreads")
+    if not isinstance(review_threads, dict):
+        raise RuntimeError("GraphQL response missing reviewThreads object")
+
+    nodes_value = review_threads.get("nodes")
+    if not isinstance(nodes_value, list):
+        raise RuntimeError("GraphQL reviewThreads.nodes must be a list")
+
+    nodes: list[dict[str, Any]] = [node for node in nodes_value if isinstance(node, dict)]
+    page_info = review_threads.get("pageInfo")
+    if not isinstance(page_info, dict):
+        raise RuntimeError("GraphQL reviewThreads.pageInfo must be an object")
+
+    has_next_page_value = page_info.get("hasNextPage")
+    if not isinstance(has_next_page_value, bool):
+        raise RuntimeError("GraphQL reviewThreads.pageInfo.hasNextPage must be a bool")
+
+    end_cursor_value = page_info.get("endCursor")
+    end_cursor = end_cursor_value if isinstance(end_cursor_value, str) else None
+    return nodes, has_next_page_value, end_cursor
+
+
+def _is_thread_resolved(thread: dict[str, Any]) -> bool:
+    return thread.get("isResolved") is True
+
+
+def _normalize_thread(thread: dict[str, Any]) -> dict[str, Any]:
+    thread_id_value = thread.get("id")
+    thread_id = thread_id_value if isinstance(thread_id_value, str) else ""
+    comments: list[dict[str, Any]] = []
+
+    comments_connection = thread.get("comments")
+    if isinstance(comments_connection, dict):
+        nodes_value = comments_connection.get("nodes")
+        if isinstance(nodes_value, list):
+            for comment_value in nodes_value:
+                if not isinstance(comment_value, dict):
+                    continue
+                comments.append(_normalize_comment(comment_value))
+
+    return {"id": thread_id, "comments": comments}
+
+
+def _normalize_comment(comment: dict[str, Any]) -> dict[str, Any]:
+    comment_id_value = comment.get("id")
+    comment_id = comment_id_value if isinstance(comment_id_value, str) else ""
+
+    author_value = comment.get("author")
+    login = ""
+    if isinstance(author_value, dict):
+        login_value = author_value.get("login")
+        if isinstance(login_value, str):
+            login = login_value
+
+    body_value = comment.get("body")
+    path_value = comment.get("path")
+
+    return {
+        "id": comment_id,
+        "body": body_value if isinstance(body_value, str) else "",
+        "path": path_value if isinstance(path_value, str) else "",
+        "line": comment.get("line"),
+        "original_line": comment.get("originalLine"),
+        "user": {"login": login},
+    }
 
 
 def _reply_to_comment(
