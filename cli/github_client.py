@@ -14,6 +14,7 @@ class GitHubClientProtocol(Protocol):
     """Interface for GitHub client used by workflows."""
 
     def get_pr(self, pr_number: int) -> Any: ...
+    def get_review_threads(self, pr: Any) -> list[dict[str, Any]]: ...
     def get_unresolved_threads(self, pr: Any) -> list[dict[str, Any]]: ...
     def safe_reply(
         self,
@@ -48,6 +49,9 @@ class GitHubClient:
     def get_pr(self, pr_number: int) -> Any:
         return self.get_repo().get_pull(pr_number)
 
+    def get_review_threads(self, pr: Any) -> list[dict[str, Any]]:
+        return get_review_threads(pr)
+
     def get_unresolved_threads(self, pr: Any) -> list[dict[str, Any]]:
         return get_unresolved_threads(pr)
 
@@ -61,8 +65,8 @@ class GitHubClient:
         _safe_reply(pr, comment_ctx, text, debug)
 
 
-def get_unresolved_threads(pr: Any) -> list[dict[str, Any]]:
-    """Fetch unresolved review threads for a PR via GraphQL."""
+def get_review_threads(pr: Any) -> list[dict[str, Any]]:
+    """Fetch all review threads for a PR via GraphQL."""
     owner, repo_name, pr_number = _resolve_pr_identity(pr)
     threads: list[dict[str, Any]] = []
     cursor: str | None = None
@@ -82,8 +86,6 @@ def get_unresolved_threads(pr: Any) -> list[dict[str, Any]]:
 
         page_nodes, has_next_page, end_cursor = _extract_review_threads_page(raw)
         for node in page_nodes:
-            if _is_thread_resolved(node):
-                continue
             threads.append(_normalize_thread(node))
 
         if not has_next_page:
@@ -94,6 +96,11 @@ def get_unresolved_threads(pr: Any) -> list[dict[str, Any]]:
         cursor = end_cursor
 
     return threads
+
+
+def get_unresolved_threads(pr: Any) -> list[dict[str, Any]]:
+    """Fetch unresolved review threads for a PR via GraphQL."""
+    return [thread for thread in get_review_threads(pr) if not bool(thread.get("is_resolved"))]
 
 
 _REVIEW_THREADS_QUERY = """
@@ -201,7 +208,11 @@ def _normalize_thread(thread: dict[str, Any]) -> dict[str, Any]:
                     continue
                 comments.append(_normalize_comment(comment_value))
 
-    return {"id": thread_id, "comments": comments}
+    return {
+        "id": thread_id,
+        "comments": comments,
+        "is_resolved": _is_thread_resolved(thread),
+    }
 
 
 def _normalize_comment(comment: dict[str, Any]) -> dict[str, Any]:

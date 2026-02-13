@@ -113,16 +113,17 @@ jobs:
 
 - **Inline comments** anchored to exact diff lines. If a line isn't in the current diff, the finding is skipped.
 - **PR-level summary** as an issue comment on each run (refreshed on re-runs; prior summaries are deleted).
-  The summary reports both `Findings (new)` for this run and `Findings (open)` for unresolved Codex findings.
-  Open unresolved P0/P1 findings force the summary verdict to `patch is incorrect` until resolved.
+  The summary reports `Findings (new)` for this run and `Findings (applicable prior)` after reconciliation.
+  Applicable prior P0/P1 findings force the summary verdict to `patch is incorrect`.
 - **Multi-line suggestions** only when contiguous and short; otherwise a single-line comment.
 
 ## Deduplication on Repeated Runs
 
-When a prior Codex review exists on the PR, findings are deduplicated in two ways:
+When a prior Codex review exists on the PR, repeated findings are handled in three ways:
 
-1. **Inline semantic dedup** — unresolved Codex review-thread comments are passed to the model's structured-output turn so it can exclude redundant findings at generation time.
-2. **Location prefilter** — a cheap post-hoc safety net that drops any finding if an unresolved Codex finding already exists on the same file within a few lines.
+1. **Inline semantic dedup** — prior Codex findings (from review threads, resolved and unresolved) are passed to the model's structured-output turn so it can exclude redundant findings at generation time.
+2. **Location prefilter** — a cheap post-hoc safety net that drops any finding if a prior Codex finding already exists on the same file within a few lines.
+3. **Applicability reconciliation** — a second structured model pass determines which prior findings are still applicable at the current PR head, and those counts drive summary totals and blocking status.
 
 ## Security & Permissions
 
@@ -134,6 +135,7 @@ When a prior Codex review exists on the PR, findings are deduplicated in two way
 
 - **422 Unprocessable Entity**: target line not in PR head diff. Rebase and re-run; set `debug_level: 2` to log anchors.
 - **Unresolved-thread context warning**: if review threads cannot be fetched, `/codex address comments` continues without thread context and logs/posts a warning so the edit run still executes.
+- **Applicable-prior count is unknown**: if prior-finding reconciliation fails during review mode, the summary marks applicable-prior counts as `unknown`.
 - **Model errors**: ensure your key supports the selected model.
 - Review uses built-in prompts (see `prompts/review.md`). Customize with `additional_prompt`.
 

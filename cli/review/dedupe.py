@@ -8,7 +8,12 @@ from typing import Any
 from github.IssueComment import IssueComment
 from github.PullRequestComment import PullRequestComment
 
-from ..models import ExistingReviewComment, FindingLocation, OpenCodexFindingsStats
+from ..models import (
+    ExistingReviewComment,
+    FindingLocation,
+    OpenCodexFindingsStats,
+    PriorCodexFinding,
+)
 from ..patch_parser import to_relative_path
 
 SUMMARY_MARKER = "Codex Autonomous Review:"
@@ -60,50 +65,66 @@ def collect_existing_review_comments(review_comments: Sequence[Any]) -> list[Exi
 
 
 def collect_existing_comment_texts_from_threads(threads: Sequence[dict[str, Any]]) -> list[str]:
-    """Collect unresolved Codex finding comments from review threads for semantic dedupe."""
-    texts: list[str] = []
-    for thread in threads:
-        finding_comment = _extract_codex_finding_comment(thread)
-        if finding_comment is None:
-            continue
+    """Collect Codex finding comments from review threads for semantic dedupe."""
+    findings = extract_prior_codex_findings(threads)
+    return collect_existing_comment_texts_from_prior_findings(findings)
 
-        location = finding_comment.path
-        if location and finding_comment.line > 0:
-            location = f"{location}:{finding_comment.line}"
+
+def collect_existing_comment_texts_from_prior_findings(
+    findings: Sequence[PriorCodexFinding],
+) -> list[str]:
+    """Collect Codex finding comments for semantic dedupe."""
+    texts: list[str] = []
+    for finding in findings:
+        location = finding.path
+        if location and finding.line > 0:
+            location = f"{location}:{finding.line}"
         prefix = f"[{location}] " if location else ""
-        texts.append(prefix + finding_comment.body)
+        texts.append(prefix + finding.body)
     return texts
 
 
 def collect_existing_review_comments_from_threads(
     threads: Sequence[dict[str, Any]],
 ) -> list[ExistingReviewComment]:
-    """Collect unresolved Codex finding comments from review threads for location dedupe."""
+    """Collect Codex finding comments from review threads for location dedupe."""
+    findings = extract_prior_codex_findings(threads)
+    return collect_existing_review_comments_from_prior_findings(findings)
+
+
+def collect_existing_review_comments_from_prior_findings(
+    findings: Sequence[PriorCodexFinding],
+) -> list[ExistingReviewComment]:
+    """Collect Codex finding comments for location dedupe."""
     items: list[ExistingReviewComment] = []
-    for thread in threads:
-        finding_comment = _extract_codex_finding_comment(thread)
-        if finding_comment is None:
-            continue
-        if not finding_comment.path or finding_comment.line <= 0:
+    for finding in findings:
+        if not finding.path or finding.line <= 0:
             continue
         items.append(
             ExistingReviewComment(
-                path=finding_comment.path,
-                line=finding_comment.line,
-                body=finding_comment.body,
+                path=finding.path,
+                line=finding.line,
+                body=finding.body,
             )
         )
     return items
 
 
 def summarize_open_codex_findings(threads: Sequence[dict[str, Any]]) -> OpenCodexFindingsStats:
-    """Summarize unresolved Codex findings from unresolved review threads."""
+    """Summarize Codex findings from review threads."""
+    findings = extract_prior_codex_findings(threads)
+    return summarize_prior_codex_findings(findings)
+
+
+def summarize_prior_codex_findings(
+    findings: Sequence[PriorCodexFinding],
+) -> OpenCodexFindingsStats:
+    """Summarize Codex findings for review summaries."""
     counts = [0, 0, 0, 0]
-    for thread in threads:
-        finding_comment = _extract_codex_finding_comment(thread)
-        if finding_comment is None:
+    for finding in findings:
+        if finding.priority < 0 or finding.priority > 3:
             continue
-        counts[finding_comment.priority] += 1
+        counts[finding.priority] += 1
 
     return OpenCodexFindingsStats(
         total=sum(counts),
@@ -128,6 +149,33 @@ def parse_priority_tag(text: str) -> int | None:
     if 0 <= parsed <= 3:
         return parsed
     return None
+
+
+def extract_prior_codex_findings(threads: Sequence[dict[str, Any]]) -> list[PriorCodexFinding]:
+    """Extract the latest Codex finding per thread."""
+    findings: list[PriorCodexFinding] = []
+    for thread in threads:
+        finding_comment = _extract_codex_finding_comment(thread)
+        if finding_comment is None:
+            continue
+
+        thread_id = _as_string(thread.get("id"))
+        is_resolved = bool(thread.get("is_resolved"))
+        finding_id = _build_prior_finding_id(thread_id, finding_comment.comment_id, finding_comment)
+        findings.append(
+            PriorCodexFinding(
+                id=finding_id,
+                thread_id=thread_id,
+                comment_id=finding_comment.comment_id,
+                title=finding_comment.title,
+                body=finding_comment.body,
+                path=finding_comment.path,
+                line=finding_comment.line,
+                priority=finding_comment.priority,
+                is_resolved=is_resolved,
+            )
+        )
+    return findings
 
 
 def prefilter_duplicates_by_location(
@@ -175,7 +223,18 @@ def prefilter_duplicates_by_location(
 
 
 class _ThreadFindingComment:
-    def __init__(self, *, body: str, path: str, line: int, priority: int) -> None:
+    def __init__(
+        self,
+        *,
+        comment_id: str,
+        title: str,
+        body: str,
+        path: str,
+        line: int,
+        priority: int,
+    ) -> None:
+        self.comment_id = comment_id
+        self.title = title
         self.body = body
         self.path = path
         self.line = line
@@ -202,6 +261,7 @@ def _extract_codex_finding_comment(thread: dict[str, Any]) -> _ThreadFindingComm
         priority = parse_priority_tag(first_line)
         if priority is None:
             continue
+        comment_id = _as_string(comment.get("id"))
 
         path_value = comment.get("path")
         path = path_value if isinstance(path_value, str) else ""
@@ -210,7 +270,14 @@ def _extract_codex_finding_comment(thread: dict[str, Any]) -> _ThreadFindingComm
         if line <= 0:
             line = _as_positive_int(comment.get("original_line"))
 
-        return _ThreadFindingComment(body=body, path=path, line=line, priority=priority)
+        return _ThreadFindingComment(
+            comment_id=comment_id,
+            title=first_line,
+            body=body,
+            path=path,
+            line=line,
+            priority=priority,
+        )
 
     return None
 
@@ -221,3 +288,26 @@ def _as_positive_int(value: Any) -> int:
     except (TypeError, ValueError):
         return 0
     return parsed if parsed > 0 else 0
+
+
+def _as_string(value: Any) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _build_prior_finding_id(
+    thread_id: str,
+    comment_id: str,
+    finding_comment: _ThreadFindingComment,
+) -> str:
+    if thread_id and comment_id:
+        return f"{thread_id}:{comment_id}"
+    if thread_id:
+        return thread_id
+    if comment_id:
+        return comment_id
+    fallback_parts = [
+        finding_comment.path or "_",
+        str(finding_comment.line),
+        str(finding_comment.priority),
+    ]
+    return ":".join(fallback_parts)

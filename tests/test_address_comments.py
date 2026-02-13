@@ -267,6 +267,9 @@ def test_process_edit_command_continues_on_thread_fetch_errors(monkeypatch) -> N
         def get_pr(self, pr_number: int):  # noqa: ARG002
             return pr
 
+        def get_review_threads(self, current_pr: _PR):  # noqa: ARG002
+            return []
+
         def get_unresolved_threads(self, current_pr: _PR):  # noqa: ARG002
             raise RuntimeError("boom")
 
@@ -335,6 +338,9 @@ def test_process_edit_command_skips_commit_when_no_agent_scoped_changes(monkeypa
         def get_pr(self, pr_number: int):  # noqa: ARG002
             return _PR()
 
+        def get_review_threads(self, current_pr):  # noqa: ARG002
+            return []
+
         def get_unresolved_threads(self, current_pr):  # noqa: ARG002
             return []
 
@@ -395,6 +401,9 @@ def test_process_edit_command_commits_only_agent_scoped_paths(monkeypatch) -> No
     class _FakeGitHubClient:
         def get_pr(self, pr_number: int):  # noqa: ARG002
             return _PR()
+
+        def get_review_threads(self, current_pr):  # noqa: ARG002
+            return []
 
         def get_unresolved_threads(self, current_pr):  # noqa: ARG002
             return []
@@ -470,6 +479,9 @@ def test_process_edit_command_uses_force_with_lease_for_rewritten_history(monkey
 
         def get_pr(self, pr_number: int):  # noqa: ARG002
             return _PR()
+
+        def get_review_threads(self, current_pr):  # noqa: ARG002
+            return []
 
         def get_unresolved_threads(self, current_pr):  # noqa: ARG002
             return []
@@ -549,6 +561,9 @@ def test_process_edit_command_fails_fast_for_active_rebase(monkeypatch) -> None:
         def get_pr(self, pr_number: int):  # noqa: ARG002
             return _PR()
 
+        def get_review_threads(self, current_pr):  # noqa: ARG002
+            return []
+
         def get_unresolved_threads(self, current_pr):  # noqa: ARG002
             return []
 
@@ -606,6 +621,9 @@ def test_process_edit_command_reports_force_with_lease_failures(monkeypatch) -> 
 
         def get_pr(self, pr_number: int):  # noqa: ARG002
             return _PR()
+
+        def get_review_threads(self, current_pr):  # noqa: ARG002
+            return []
 
         def get_unresolved_threads(self, current_pr):  # noqa: ARG002
             return []

@@ -14,21 +14,24 @@ from ..context_manager import ContextManager
 from ..exceptions import CodexExecutionError
 from ..github_client import GitHubClient, GitHubClientProtocol
 from ..models import (
+    PRIOR_FINDINGS_RECONCILIATION_SCHEMA,
     REVIEW_OUTPUT_SCHEMA,
     ExistingReviewComment,
     OpenCodexFindingsStats,
+    PriorCodexFinding,
     ReviewRunResult,
 )
 from ..review.dedupe import (
     SUMMARY_MARKER,
     collect_existing_comment_texts,
-    collect_existing_comment_texts_from_threads,
+    collect_existing_comment_texts_from_prior_findings,
     collect_existing_review_comments,
-    collect_existing_review_comments_from_threads,
+    collect_existing_review_comments_from_prior_findings,
+    extract_prior_codex_findings,
     has_prior_codex_review,
     parse_priority_tag,
     prefilter_duplicates_by_location,
-    summarize_open_codex_findings,
+    summarize_prior_codex_findings,
 )
 from ..review.posting import (
     build_inline_comment_payloads,
@@ -57,18 +60,20 @@ def _build_review_summary_with_open_counts(
     new_findings_count: int,
     open_findings: OpenCodexFindingsStats,
 ) -> str:
-    open_total = "unknown" if open_findings.unknown else str(open_findings.total)
-    open_blocking = "unknown" if open_findings.unknown else str(open_findings.blocking)
+    applicable_total = "unknown" if open_findings.unknown else str(open_findings.total)
+    applicable_blocking = "unknown" if open_findings.unknown else str(open_findings.blocking)
     summary_lines = [
         SUMMARY_MARKER,
         f"- Overall: {result.overall_correctness.strip() or 'patch is correct'}",
         f"- Findings (new): {new_findings_count}",
-        f"- Findings (open): {open_total}",
-        f"- Open blocking findings (P0/P1): {open_blocking}",
+        f"- Findings (applicable prior): {applicable_total}",
+        f"- Applicable prior blocking findings (P0/P1): {applicable_blocking}",
     ]
 
     if not open_findings.unknown and open_findings.highest_priority is not None:
-        summary_lines.append(f"- Highest open priority: P{open_findings.highest_priority}")
+        summary_lines.append(
+            f"- Highest applicable prior priority: P{open_findings.highest_priority}"
+        )
 
     overall_explanation = result.overall_explanation.strip()
     if overall_explanation:
@@ -110,25 +115,27 @@ def _has_blocking_findings(findings: list[dict[str, Any]]) -> bool:
 def _compute_effective_review_result(
     result: ReviewRunResult,
     finalized_findings: list[dict[str, Any]],
-    open_findings: OpenCodexFindingsStats,
+    applicable_prior_findings: OpenCodexFindingsStats,
 ) -> ReviewRunResult:
     base_overall = _canonical_overall_correctness(result.overall_correctness)
     has_new_blocking = _has_blocking_findings(finalized_findings)
-    has_open_blocking = (not open_findings.unknown) and open_findings.blocking > 0
+    has_applicable_blocking = (
+        not applicable_prior_findings.unknown
+    ) and applicable_prior_findings.blocking > 0
     overall = (
         "patch is incorrect"
-        if base_overall == "patch is incorrect" or has_new_blocking or has_open_blocking
+        if base_overall == "patch is incorrect" or has_new_blocking or has_applicable_blocking
         else "patch is correct"
     )
 
     notes: list[str] = []
-    if has_open_blocking:
+    if has_applicable_blocking:
         notes.append(
-            "Outstanding unresolved Codex blocking findings (P0/P1) remain open on this PR."
+            "Applicable prior Codex blocking findings (P0/P1) remain unresolved by current code."
         )
-    if open_findings.unknown:
+    if applicable_prior_findings.unknown:
         notes.append(
-            "Open finding count is unavailable because unresolved review threads could not be fetched."
+            "Applicable prior finding count is unavailable because reconciliation did not complete."
         )
 
     explanation = result.overall_explanation.strip()
@@ -141,6 +148,52 @@ def _compute_effective_review_result(
         overall_explanation=explanation,
         findings=list(finalized_findings),
     )
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
+
+
+def _build_reconciliation_prompt(
+    prior_findings: list[PriorCodexFinding],
+    new_findings: list[dict[str, Any]],
+) -> str:
+    lines = [
+        "<reconciliation_task>",
+        "Determine which prior Codex findings are still applicable at the current PR head.",
+        "A prior finding is NOT applicable if the code now addresses it, even when the GH thread is not manually closed.",
+        "Use repository inspection and git history as needed.",
+        "</reconciliation_task>",
+        "<new_findings>",
+        f"count={len(new_findings)}",
+    ]
+    for finding in new_findings:
+        title = str(finding.get("title") or "").strip()
+        if title:
+            lines.append(title)
+    lines.append("</new_findings>")
+    lines.append("<prior_findings>")
+    for prior in prior_findings:
+        lines.append(
+            f'<finding id="{prior.id}" priority="P{prior.priority}" '
+            f'resolved="{str(prior.is_resolved).lower()}" '
+            f'path="{prior.path}" line="{prior.line}">'
+        )
+        lines.append("<title>")
+        lines.append(prior.title)
+        lines.append("</title>")
+        lines.append("<body>")
+        lines.append(prior.body)
+        lines.append("</body>")
+        lines.append("</finding>")
+    lines.append("</prior_findings>")
+    lines.append(
+        "Return only finding ids that are still applicable in applicable_prior_ids. "
+        "Use dismissed_prior_ids for findings that are now addressed."
+    )
+    return "\n".join(lines)
 
 
 class ReviewWorkflow:
@@ -180,20 +233,14 @@ class ReviewWorkflow:
     def _build_schema_prompt(
         self,
         existing_texts: list[str],
-        open_findings: OpenCodexFindingsStats,
+        prior_findings_count: int,
     ) -> str:
-        """Build the turn-2 prompt for structured output, with dedupe and open-findings facts."""
-        lines: list[str] = ["<open_codex_findings>"]
-        if open_findings.unknown:
-            lines.append("status=unknown")
-        else:
-            lines.append(f"total={open_findings.total}")
-            lines.append(f"p0={open_findings.p0}")
-            lines.append(f"p1={open_findings.p1}")
-            lines.append(f"p2={open_findings.p2}")
-            lines.append(f"p3={open_findings.p3}")
-            lines.append(f"blocking={open_findings.blocking}")
-        lines.append("</open_codex_findings>")
+        """Build turn-2 prompt for structured output with prior-finding context."""
+        lines: list[str] = [
+            "<prior_codex_findings>",
+            f"count={prior_findings_count}",
+            "</prior_codex_findings>",
+        ]
 
         if not existing_texts:
             lines.append(
@@ -208,7 +255,8 @@ class ReviewWorkflow:
         lines.append(
             "Produce the JSON review output now. "
             "Exclude any findings that are semantically redundant with the existing review comments above. "
-            "Treat the open_codex_findings block as existing unresolved findings and only return newly introduced findings."
+            "Treat prior_codex_findings as previously reported findings (resolved or unresolved) "
+            "and only return newly introduced findings."
         )
         return "\n".join(lines)
 
@@ -264,26 +312,36 @@ class ReviewWorkflow:
         issue_comments_snapshot = list(pr.get_issue_comments())
         reviews_snapshot = list(pr.get_reviews())
         had_prior_codex_review = has_prior_codex_review(reviews_snapshot, issue_comments_snapshot)
-        unresolved_threads: list[dict[str, Any]] | None = None
-        open_findings = OpenCodexFindingsStats()
+        prior_codex_findings: list[PriorCodexFinding] = []
+        applicable_prior_findings = OpenCodexFindingsStats()
         dedupe_texts: list[str] = []
+        existing_struct_for_prefilter: list[ExistingReviewComment] = []
+        prior_findings_fetch_failed = False
 
         try:
-            unresolved_threads = self.github_client.get_unresolved_threads(pr)
-            open_findings = summarize_open_codex_findings(unresolved_threads)
-            dedupe_texts = collect_existing_comment_texts_from_threads(unresolved_threads)
+            review_threads = self.github_client.get_review_threads(pr)
+            prior_codex_findings = extract_prior_codex_findings(review_threads)
+            dedupe_texts = collect_existing_comment_texts_from_prior_findings(prior_codex_findings)
+            existing_struct_for_prefilter = collect_existing_review_comments_from_prior_findings(
+                prior_codex_findings
+            )
+            self._debug(1, f"Prior Codex findings loaded: {len(prior_codex_findings)}")
         except Exception as exc:
+            prior_findings_fetch_failed = True
             self._debug(
                 1,
-                f"Failed to retrieve unresolved review threads for summary/dedupe context: {exc}",
+                f"Failed to retrieve review threads for prior-finding context: {exc}",
             )
-            open_findings = OpenCodexFindingsStats.unknown_stats()
+            applicable_prior_findings = OpenCodexFindingsStats.unknown_stats()
             if had_prior_codex_review:
                 dedupe_texts = collect_existing_comment_texts(review_comments_snapshot)
+                existing_struct_for_prefilter = collect_existing_review_comments(
+                    review_comments_snapshot
+                )
 
         schema_prompt = self._build_schema_prompt(
             dedupe_texts,
-            open_findings,
+            len(prior_codex_findings),
         )
 
         print("Running Codex to generate review findings...", flush=True)
@@ -307,19 +365,39 @@ class ReviewWorkflow:
         finalized_findings = self._finalize_findings(
             findings=parsed_result.findings,
             rename_map=rename_map,
-            unresolved_threads=unresolved_threads,
-            prior_codex_review=had_prior_codex_review,
-            review_comments_snapshot=review_comments_snapshot,
+            existing_struct=existing_struct_for_prefilter,
         )
+        if not prior_findings_fetch_failed and prior_codex_findings:
+            try:
+                applicable_prior_ids = self._reconcile_applicable_prior_finding_ids(
+                    prior_codex_findings,
+                    finalized_findings,
+                )
+                applicable_prior_id_set = set(applicable_prior_ids)
+                applicable_prior_list = [
+                    finding
+                    for finding in prior_codex_findings
+                    if finding.id in applicable_prior_id_set
+                ]
+                applicable_prior_findings = summarize_prior_codex_findings(applicable_prior_list)
+                self._debug(
+                    1,
+                    "Applicable prior Codex findings after reconciliation: "
+                    f"{applicable_prior_findings.total}",
+                )
+            except Exception as exc:
+                self._debug(1, f"Failed to reconcile prior findings applicability: {exc}")
+                applicable_prior_findings = OpenCodexFindingsStats.unknown_stats()
+
         effective_result = _compute_effective_review_result(
             parsed_result,
             finalized_findings,
-            open_findings,
+            applicable_prior_findings,
         )
         summary = _build_review_summary_with_open_counts(
             result=effective_result,
             new_findings_count=len(finalized_findings),
-            open_findings=open_findings,
+            open_findings=applicable_prior_findings,
         )
         if not self.config.dry_run:
             self._delete_prior_summary(pr)
@@ -336,22 +414,32 @@ class ReviewWorkflow:
         )
         return effective_result.as_dict()
 
+    def _reconcile_applicable_prior_finding_ids(
+        self,
+        prior_codex_findings: list[PriorCodexFinding],
+        new_findings: list[dict[str, Any]],
+    ) -> list[str]:
+        prompt = _build_reconciliation_prompt(prior_codex_findings, new_findings)
+        reconciliation_output = self.codex_client.execute(
+            prompt,
+            suppress_stream=True,
+            sandbox_mode="danger-full-access",
+            output_schema=PRIOR_FINDINGS_RECONCILIATION_SCHEMA,
+            schema_prompt="Return the reconciliation JSON now.",
+        )
+        payload = json.loads(reconciliation_output)
+        applicable_ids = _as_string_list(payload.get("applicable_prior_ids"))
+        valid_ids = {finding.id for finding in prior_codex_findings}
+        return [finding_id for finding_id in applicable_ids if finding_id in valid_ids]
+
     def _finalize_findings(
         self,
         *,
         findings: list[dict[str, Any]],
         rename_map: dict[str, str],
-        unresolved_threads: list[dict[str, Any]] | None,
-        prior_codex_review: bool,
-        review_comments_snapshot: list[Any],
+        existing_struct: list[ExistingReviewComment],
     ) -> list[dict[str, Any]]:
         finalized = list(findings)
-
-        existing_struct: list[ExistingReviewComment] = []
-        if unresolved_threads is not None:
-            existing_struct = collect_existing_review_comments_from_threads(unresolved_threads)
-        elif prior_codex_review:
-            existing_struct = collect_existing_review_comments(review_comments_snapshot)
 
         if not existing_struct:
             return finalized

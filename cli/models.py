@@ -67,7 +67,7 @@ class ExistingReviewComment:
 
 @dataclass(frozen=True)
 class OpenCodexFindingsStats:
-    """Summary counters for unresolved Codex findings."""
+    """Summary counters for Codex findings used in review summaries."""
 
     total: int = 0
     p0: int = 0
@@ -152,6 +152,21 @@ class ReviewRunResult:
         }
 
 
+@dataclass(frozen=True)
+class PriorCodexFinding:
+    """Prior Codex finding extracted from review threads."""
+
+    id: str
+    thread_id: str
+    comment_id: str
+    title: str
+    body: str
+    path: str
+    line: int
+    priority: int
+    is_resolved: bool = False
+
+
 REVIEW_OUTPUT_SCHEMA: dict[str, object] = {
     "type": "object",
     "properties": {
@@ -202,6 +217,24 @@ REVIEW_OUTPUT_SCHEMA: dict[str, object] = {
         "overall_explanation",
         "overall_confidence_score",
     ],
+    "additionalProperties": False,
+}
+
+
+PRIOR_FINDINGS_RECONCILIATION_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "applicable_prior_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "dismissed_prior_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "rationale": {"type": "string"},
+    },
+    "required": ["applicable_prior_ids", "dismissed_prior_ids", "rationale"],
     "additionalProperties": False,
 }
 
