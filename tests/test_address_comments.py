@@ -44,26 +44,189 @@ def test_intent_detection_variants() -> None:
 
 def test_get_unresolved_threads_filters_resolved() -> None:
     class _Req:
-        def requestJsonAndCheck(self, method: str, url: str):  # noqa: N802
-            threads = [
-                {"id": "1", "resolved": True, "comments": []},
-                {"id": "2", "is_resolved": True, "comments": []},
-                {"id": "3", "isResolved": True, "comments": []},
-                {"id": "4", "state": "resolved", "comments": []},
-                {"id": "5", "resolution": "completed", "comments": []},
-                {"id": "6", "comments": [{"path": "a.py", "body": "x"}]},
-                {"id": "7", "state": "active", "comments": [{"path": "b.py"}]},
-            ]
-            return ({}, threads)
+        def graphql_query(self, query: str, variables: dict[str, object]):  # noqa: ARG002
+            assert variables["owner"] == "o"
+            assert variables["name"] == "r"
+            assert variables["number"] == 1
+            return (
+                {},
+                {
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {
+                                    "nodes": [
+                                        {
+                                            "id": "thread-1",
+                                            "isResolved": True,
+                                            "comments": {"nodes": []},
+                                        },
+                                        {
+                                            "id": "thread-2",
+                                            "isResolved": False,
+                                            "comments": {
+                                                "nodes": [
+                                                    {
+                                                        "id": "comment-1",
+                                                        "body": "please fix",
+                                                        "path": "a.py",
+                                                        "line": 12,
+                                                        "originalLine": 10,
+                                                        "author": {"login": "alice"},
+                                                    }
+                                                ]
+                                            },
+                                        },
+                                        {
+                                            "id": "thread-3",
+                                            "isResolved": False,
+                                            "comments": {
+                                                "nodes": [
+                                                    {
+                                                        "id": "comment-2",
+                                                        "body": "nit",
+                                                        "path": "b.py",
+                                                        "line": 7,
+                                                        "originalLine": 7,
+                                                        "author": {"login": "bob"},
+                                                    }
+                                                ]
+                                            },
+                                        },
+                                    ],
+                                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+
+    class _Owner:
+        login = "o"
+
+    class _Repo:
+        owner = _Owner()
+        name = "r"
+
+    class _Base:
+        repo = _Repo()
 
     class _PR:
-        url = "https://api.example/pr/1"
+        number = 1
+        base = _Base()
         _requester = _Req()
 
     pr = _PR()
     res = get_unresolved_threads(pr)
     ids = {t.get("id") for t in res}
-    assert ids == {"6", "7"}
+    assert ids == {"thread-2", "thread-3"}
+
+    comments = [comment for thread in res for comment in thread.get("comments", [])]
+    assert comments == [
+        {
+            "id": "comment-1",
+            "body": "please fix",
+            "path": "a.py",
+            "line": 12,
+            "original_line": 10,
+            "user": {"login": "alice"},
+        },
+        {
+            "id": "comment-2",
+            "body": "nit",
+            "path": "b.py",
+            "line": 7,
+            "original_line": 7,
+            "user": {"login": "bob"},
+        },
+    ]
+
+
+def test_get_unresolved_threads_paginates_graphql_results() -> None:
+    class _Req:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def graphql_query(self, query: str, variables: dict[str, object]):  # noqa: ARG002
+            self.calls.append(dict(variables))
+            after = variables.get("after")
+            if after is None:
+                return (
+                    {},
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [
+                                            {
+                                                "id": "thread-1",
+                                                "isResolved": False,
+                                                "comments": {"nodes": []},
+                                            }
+                                        ],
+                                        "pageInfo": {
+                                            "hasNextPage": True,
+                                            "endCursor": "cursor-1",
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                    },
+                )
+
+            assert after == "cursor-1"
+            return (
+                {},
+                {
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {
+                                    "nodes": [
+                                        {
+                                            "id": "thread-2",
+                                            "isResolved": True,
+                                            "comments": {"nodes": []},
+                                        },
+                                        {
+                                            "id": "thread-3",
+                                            "isResolved": False,
+                                            "comments": {"nodes": []},
+                                        },
+                                    ],
+                                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+
+    class _Owner:
+        login = "o"
+
+    class _Repo:
+        owner = _Owner()
+        name = "r"
+
+    class _Base:
+        repo = _Repo()
+
+    class _PR:
+        number = 42
+        base = _Base()
+        _requester = _Req()
+
+    pr = _PR()
+    result = get_unresolved_threads(pr)
+    assert [thread.get("id") for thread in result] == ["thread-1", "thread-3"]
+    assert pr._requester.calls == [
+        {"owner": "o", "name": "r", "number": 42, "after": None},
+        {"owner": "o", "name": "r", "number": 42, "after": "cursor-1"},
+    ]
 
 
 def test_tip_copy_mentions_address_comments() -> None:
@@ -71,7 +234,9 @@ def test_tip_copy_mentions_address_comments() -> None:
     assert '"/codex address comments"' in text
 
 
-def test_process_edit_command_reports_fetch_errors() -> None:
+def test_process_edit_command_continues_on_thread_fetch_errors(monkeypatch) -> None:
+    import cli.workflows.edit_workflow as workflow_mod
+
     # Fake PR
     class _Issue:
         def __init__(self) -> None:
@@ -108,6 +273,27 @@ def test_process_edit_command_reports_fetch_errors() -> None:
         def safe_reply(self, current_pr: _PR, comment_ctx, text: str, debug):  # noqa: ARG002
             current_pr.as_issue().create_comment(text)
 
+    class _FakeCodexClient:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        def execute(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG002
+            self.prompts.append(prompt)
+            return "ok"
+
+    monkeypatch.setattr(workflow_mod, "git_current_head_sha", lambda: "head")
+    monkeypatch.setattr(workflow_mod, "git_remote_head_sha", lambda branch: "remote")  # noqa: ARG005
+    monkeypatch.setattr(
+        workflow_mod,
+        "git_worktree_snapshot",
+        lambda: GitWorktreeSnapshot(changed_paths=frozenset(), path_states={}),
+    )
+    monkeypatch.setattr(workflow_mod, "git_rebase_in_progress", lambda: False)
+    monkeypatch.setattr(workflow_mod, "git_has_changes", lambda: False)
+    monkeypatch.setattr(workflow_mod, "git_head_is_ahead", lambda branch: False)  # noqa: ARG005
+
+    fake_codex = _FakeCodexClient()
+
     ep = EditWorkflow(
         ReviewConfig(
             github_token="test",
@@ -115,6 +301,7 @@ def test_process_edit_command_reports_fetch_errors() -> None:
             pr_number=1,
             mode="act",
         ),
+        codex_client=cast(Any, fake_codex),
         github_client=_FakeGitHubClient(),
     )
 
@@ -125,11 +312,10 @@ def test_process_edit_command_reports_fetch_errors() -> None:
         "body": "/codex address comments",
     }
     rc = ep.process_edit_command("/codex address comments", 1, comment_ctx)
-    # exit code 1 and a reply posted
-    assert rc == 1
-    assert pr._iss.comments and "Failed to retrieve review threads:" in pr._iss.comments[0]  # type: ignore[attr-defined]
-
-    # no allowed_files block in simplified prompt; no test required
+    assert rc == 0
+    assert pr._iss.comments and "Failed to retrieve review threads;" in pr._iss.comments[0]  # type: ignore[attr-defined]
+    assert fake_codex.prompts
+    assert "<unresolved_comments>" not in fake_codex.prompts[0]
 
 
 def test_process_edit_command_skips_commit_when_no_agent_scoped_changes(monkeypatch) -> None:

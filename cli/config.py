@@ -18,6 +18,7 @@ _CONFIG_OVERRIDE_KEYS = frozenset(
         "model_provider",
         "model_name",
         "reasoning_effort",
+        "web_search_mode",
         "act_instructions",
         "debug_level",
         "stream_output",
@@ -45,6 +46,7 @@ class ReviewConfig:
     model_provider: str = "openai"
     model_name: str = "gpt-5"
     reasoning_effort: str = "medium"
+    web_search_mode: str = "live"
 
     # Act mode configuration
     act_instructions: str = ""
@@ -86,6 +88,7 @@ class ReviewConfig:
         model_provider = os.environ.get("CODEX_PROVIDER", "openai").strip()
         model_name = os.environ.get("CODEX_MODEL", "gpt-5").strip()
         reasoning_effort = os.environ.get("CODEX_REASONING_EFFORT", "medium").strip()
+        web_search_mode = os.environ.get("CODEX_WEB_SEARCH_MODE", "live").strip()
 
         # Act mode configuration
         act_instructions = os.environ.get("CODEX_ACT_INSTRUCTIONS", "").strip()
@@ -118,6 +121,7 @@ class ReviewConfig:
             model_provider=model_provider,
             model_name=model_name,
             reasoning_effort=reasoning_effort,
+            web_search_mode=web_search_mode,
             act_instructions=act_instructions,
             debug_level=debug_level,
             stream_output=stream_output,
@@ -173,6 +177,12 @@ class ReviewConfig:
 
         if self.debug_level < 0:
             raise ConfigurationError("Debug level must be non-negative")
+
+        if self.web_search_mode not in ("disabled", "cached", "live"):
+            raise ConfigurationError(
+                f"Invalid web_search_mode: {self.web_search_mode}. "
+                "Must be 'disabled', 'cached', or 'live'"
+            )
 
         if self.model_provider == "openai":
             has_openai_key = bool(os.environ.get("OPENAI_API_KEY"))

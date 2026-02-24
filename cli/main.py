@@ -100,6 +100,13 @@ Environment Variables:
         default="medium",
         help="Reasoning effort level (default: medium)",
     )
+    parser.add_argument(
+        "--web-search-mode",
+        dest="web_search_mode",
+        choices=["disabled", "cached", "live"],
+        default="live",
+        help="Web search mode (default: live)",
+    )
 
     # Act mode configuration
     parser.add_argument(
