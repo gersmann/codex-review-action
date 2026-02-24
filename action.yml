@@ -71,6 +71,11 @@ runs:
           echo "::error::Invalid codex_python_version: ${codex_version_spec}. This action requires codex-python >=1.0 <2.0."
           exit 2
         fi
+    - name: Set up Python 3.14
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.14"
+
     - name: Install Python dependencies
       shell: bash
       run: |
