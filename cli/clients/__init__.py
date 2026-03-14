@@ -1,0 +1,1 @@
+"""External-system client adapters."""

@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any
+import sys
+from dataclasses import dataclass
 
-from github.File import File
-from github.PullRequest import PullRequest
-
-from ..anchor_engine import build_anchor_maps
-from ..codex_client import CodexClient
-from ..config import ReviewConfig, make_debug
-from ..context_manager import ContextManager
-from ..exceptions import CodexExecutionError
-from ..github_client import GitHubClient, GitHubClientProtocol
-from ..models import REVIEW_OUTPUT_SCHEMA, ReviewRunResult
+from ..clients.codex_client import CodexClient
+from ..clients.github_client import GitHubClient, GitHubClientProtocol
+from ..core.config import ReviewConfig, make_debug
+from ..core.exceptions import CodexExecutionError, ReviewContractError
+from ..core.github_types import (
+    ChangedFileProtocol,
+    IssueCommentLikeProtocol,
+    PullRequestLikeProtocol,
+    ReviewCommentLikeProtocol,
+    ReviewLikeProtocol,
+)
+from ..core.models import REVIEW_OUTPUT_SCHEMA, ReviewRunResult
+from ..review.anchor_engine import build_anchor_maps
+from ..review.artifacts import ReviewArtifacts
+from ..review.context_manager import ReviewContextWriter
 from ..review.dedupe import (
     SUMMARY_MARKER,
     collect_existing_comment_texts,
@@ -22,11 +27,12 @@ from ..review.dedupe import (
     prefilter_duplicates_by_location,
 )
 from ..review.posting import (
+    ReviewPostingOutcome,
     build_inline_comment_payloads,
     persist_anchor_maps,
     post_inline_comments,
 )
-from ..review_prompt import PromptBuilder
+from ..review.review_prompt import compose_prompt, load_guidelines
 
 SUMMARY_TIP = (
     'Tip: comment with "/codex address comments" to attempt automated fixes for unresolved '
@@ -34,12 +40,34 @@ SUMMARY_TIP = (
 )
 
 
-def _build_review_summary(result: ReviewRunResult) -> str:
+@dataclass(frozen=True)
+class _ReviewSnapshots:
+    review_comments: list[ReviewCommentLikeProtocol]
+    issue_comments: list[IssueCommentLikeProtocol]
+    reviews: list[ReviewLikeProtocol]
+    had_prior_codex_review: bool
+
+
+@dataclass(frozen=True)
+class ReviewWorkflowResult:
+    review: ReviewRunResult
+    posting_outcome: ReviewPostingOutcome
+
+
+def _build_review_summary(result: ReviewRunResult, posting_outcome: ReviewPostingOutcome) -> str:
     summary_lines = [
         SUMMARY_MARKER,
         f"- Overall: {result.overall_correctness.strip() or 'patch is correct'}",
         f"- Findings (total): {len(result.findings)}",
     ]
+    if posting_outcome.dropped_count > 0:
+        summary_lines.append(
+            f"- Findings not publishable: {posting_outcome.dropped_count} ({posting_outcome.describe_drops()})"
+        )
+    if posting_outcome.post_result.dry_run:
+        summary_lines.append(f"- Inline comments ready: {posting_outcome.publishable_count}")
+    elif posting_outcome.publishable_count > 0:
+        summary_lines.append(f"- Inline comments posted: {posting_outcome.published_count}")
 
     overall_explanation = result.overall_explanation.strip()
     if overall_explanation:
@@ -62,9 +90,8 @@ class ReviewWorkflow:
         codex_client: CodexClient | None = None,
     ) -> None:
         self.config = config
-        self.prompt_builder = PromptBuilder(config)
         self.codex_client = codex_client or CodexClient(config)
-        self.context_manager = ContextManager()
+        self.context_manager = ReviewContextWriter()
         self.github_client: GitHubClientProtocol = github_client or GitHubClient(config)
         self._debug = make_debug(config)
 
@@ -85,7 +112,7 @@ class ReviewWorkflow:
         )
         return "\n".join(parts).strip()
 
-    def _build_schema_prompt(self, existing_comments: list[Any]) -> str:
+    def _build_schema_prompt(self, existing_comments: list[ReviewCommentLikeProtocol]) -> str:
         """Build the turn-2 prompt for structured output, with optional dedup context."""
         existing_texts = collect_existing_comment_texts(existing_comments)
         if not existing_texts:
@@ -101,30 +128,26 @@ class ReviewWorkflow:
         )
         return "\n".join(lines)
 
-    def process_review(self, pr_number: int | None = None) -> dict[str, Any]:
-        """Process a code review for the given pull request."""
-        resolved_pr_number = pr_number if pr_number is not None else self.config.pr_number
-        if resolved_pr_number is None:
-            raise ValueError("PR number must be provided")
-
-        self._debug(1, f"Processing review for {self.config.repository} PR #{resolved_pr_number}")
-
-        pr = self.github_client.get_pr(resolved_pr_number)
-        if not isinstance(pr, PullRequest):
-            raise ValueError("Expected a PullRequest instance")
-
-        changed_files = list(pr.get_files())
+    def _build_rename_map(self, changed_files: list[ChangedFileProtocol]) -> dict[str, str]:
         rename_map: dict[str, str] = {}
         for changed_file in changed_files:
-            if changed_file.status == "renamed":
-                previous_filename = changed_file.previous_filename
-                if previous_filename:
-                    rename_map[previous_filename] = changed_file.filename
+            if changed_file.status != "renamed":
+                continue
+            previous_filename = changed_file.previous_filename
+            current_filename = changed_file.filename
+            if previous_filename and current_filename:
+                rename_map[previous_filename] = current_filename
+        return rename_map
 
+    def _require_head_sha(self, pr: PullRequestLikeProtocol) -> str:
         head_sha = pr.head.sha if pr.head else None
-        if not head_sha:
-            raise ValueError("Missing head commit SHA")
+        if head_sha:
+            return head_sha
+        raise ReviewContractError(
+            f"Missing PR head commit SHA for {self.config.repository}#{pr.number}"
+        )
 
+    def _debug_changed_files(self, changed_files: list[ChangedFileProtocol]) -> None:
         self._debug(1, f"Changed files: {len(changed_files)}")
         for changed_file in changed_files[:10]:
             patch_len = (
@@ -135,87 +158,147 @@ class ReviewWorkflow:
                 f" - {changed_file.filename} status={changed_file.status} patch_len={patch_len}",
             )
 
-        repo_root = self.config.repo_root or Path(".").resolve()
-        context_dir_name = self.config.context_dir_name or ".codex-context"
-        self.context_manager.write_context_artifacts(pr, repo_root, context_dir_name)
+    def _capture_review_snapshots(self, pr: PullRequestLikeProtocol) -> _ReviewSnapshots:
+        try:
+            review_comments_snapshot = list(pr.get_review_comments())
+        except Exception as exc:
+            raise ReviewContractError(
+                f"Failed to retrieve review comments for {self.config.repository}#{pr.number}: {exc}"
+            ) from exc
+        try:
+            issue_comments_snapshot = list(pr.get_issue_comments())
+        except Exception as exc:
+            raise ReviewContractError(
+                f"Failed to retrieve issue comments for {self.config.repository}#{pr.number}: {exc}"
+            ) from exc
+        try:
+            reviews_snapshot = list(pr.get_reviews())
+        except Exception as exc:
+            raise ReviewContractError(
+                f"Failed to retrieve reviews for {self.config.repository}#{pr.number}: {exc}"
+            ) from exc
+        return _ReviewSnapshots(
+            review_comments=review_comments_snapshot,
+            issue_comments=issue_comments_snapshot,
+            reviews=reviews_snapshot,
+            had_prior_codex_review=has_prior_codex_review(
+                reviews_snapshot, issue_comments_snapshot
+            ),
+        )
 
-        guidelines = self.prompt_builder.load_guidelines()
-        raw_prompt = self.prompt_builder.compose_prompt(changed_files, pr)
+    def _parse_structured_review_output(self, output: str) -> ReviewRunResult:
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError as parse_err:
+            preview = output.strip()
+            if not preview:
+                preview = "(empty response)"
+            if len(preview) > 1200:
+                preview = preview[:1200] + "\n\n... (truncated)"
+            self._debug(1, f"Structured output was not valid JSON: {parse_err}")
+            print("Model did not return valid JSON (truncated preview):")
+            print(preview)
+            raise CodexExecutionError(f"JSON parsing error: {parse_err}") from parse_err
+
+        try:
+            return ReviewRunResult.from_payload(payload)
+        except ReviewContractError:
+            raise
+        except Exception as exc:
+            raise ReviewContractError(f"Invalid structured review output: {exc}") from exc
+
+    def _publish_summary(self, pr: PullRequestLikeProtocol, summary: str) -> None:
+        if self.config.dry_run:
+            self._debug(1, "DRY_RUN: would refresh summary issue comment")
+            return
+
+        delete_warnings = self._delete_prior_summary(pr)
+        for warning in delete_warnings:
+            print(warning, file=sys.stderr)
+        pr.as_issue().create_comment(summary)
+
+    def process_review(self, pr_number: int) -> ReviewWorkflowResult:
+        """Process a code review for the given pull request."""
+        self._debug(1, f"Processing review for {self.config.repository} PR #{pr_number}")
+
+        pr = self.github_client.get_pr(pr_number)
+        changed_files = list(pr.get_files())
+        rename_map = self._build_rename_map(changed_files)
+        head_sha = self._require_head_sha(pr)
+        self._debug_changed_files(changed_files)
+
+        repo_root = self.config.resolved_repo_root
+        context_dir_name = self.config.resolved_context_dir_name
+        artifacts = ReviewArtifacts(repo_root=repo_root, context_dir_name=context_dir_name)
+        snapshots = self._capture_review_snapshots(pr)
+        self.context_manager.write_context_artifacts(
+            pr,
+            artifacts,
+            issue_comments=snapshots.issue_comments,
+            review_comments=snapshots.review_comments,
+        )
+
+        guidelines = load_guidelines(self.config)
+        raw_prompt = compose_prompt(self.config, changed_files, pr, artifacts)
         base_instructions = self._build_review_base_instructions(guidelines)
         prompt = base_instructions + "\n\n" + raw_prompt
 
         self._debug(2, f"Prompt length: {len(prompt)} chars")
 
-        # Fetch existing comments before execute() so we can feed them
-        # into the structured-output turn for inline deduplication.
-        review_comments_snapshot = list(pr.get_review_comments())
-        issue_comments_snapshot = list(pr.get_issue_comments())
-        reviews_snapshot = list(pr.get_reviews())
-        had_prior_codex_review = has_prior_codex_review(reviews_snapshot, issue_comments_snapshot)
-
         schema_prompt = self._build_schema_prompt(
-            review_comments_snapshot if had_prior_codex_review else [],
+            snapshots.review_comments if snapshots.had_prior_codex_review else [],
         )
 
         print("Running Codex to generate review findings...", flush=True)
 
-        output = self.codex_client.execute(
+        output = self.codex_client.execute_structured(
             prompt,
             sandbox_mode="danger-full-access",
             output_schema=REVIEW_OUTPUT_SCHEMA,
             schema_prompt=schema_prompt,
         )
 
-        try:
-            payload = json.loads(output)
-        except json.JSONDecodeError as parse_err:
-            self._debug(1, f"Structured output was not valid JSON: {parse_err}")
-            print("Model did not return valid JSON:")
-            print(output)
-            raise CodexExecutionError(f"JSON parsing error: {parse_err}") from parse_err
+        parsed_result = self._parse_structured_review_output(output)
 
-        parsed_result = ReviewRunResult.from_payload(payload)
-
-        summary = _build_review_summary(parsed_result)
-        if not self.config.dry_run:
-            self._delete_prior_summary(pr)
-            pr.as_issue().create_comment(summary)
-        else:
-            self._debug(1, "DRY_RUN: would refresh summary issue comment")
-
-        self._post_results(
+        posting_outcome = self._post_results(
             parsed_result,
             changed_files,
             pr,
             head_sha,
             rename_map,
-            prior_codex_review=had_prior_codex_review,
-            review_comments_snapshot=review_comments_snapshot,
+            prior_codex_review=snapshots.had_prior_codex_review,
+            review_comments_snapshot=snapshots.review_comments,
         )
-        return parsed_result.as_dict()
+
+        summary = _build_review_summary(parsed_result, posting_outcome)
+        self._publish_summary(pr, summary)
+
+        return ReviewWorkflowResult(
+            review=parsed_result,
+            posting_outcome=posting_outcome,
+        )
 
     def _post_results(
         self,
-        result: ReviewRunResult | dict[str, Any],
-        changed_files: list[File],
-        pr: PullRequest,
+        result: ReviewRunResult,
+        changed_files: list[ChangedFileProtocol],
+        pr: PullRequestLikeProtocol,
         head_sha: str,
         rename_map: dict[str, str],
         *,
         prior_codex_review: bool | None = None,
-        review_comments_snapshot: list[Any] | None = None,
-    ) -> None:
+        review_comments_snapshot: list[ReviewCommentLikeProtocol] | None = None,
+    ) -> ReviewPostingOutcome:
         """Post review results to GitHub."""
-        normalized = (
-            result if isinstance(result, ReviewRunResult) else ReviewRunResult.from_payload(result)
-        )
-        findings: list[dict[str, Any]] = list(normalized.findings)
+        findings = list(result.findings)
+        total_findings = len(findings)
 
         review_comments = review_comments_snapshot
         should_dedupe = prior_codex_review
+        dropped_prefilter = 0
         if should_dedupe is None:
-            issue_comments = list(pr.get_issue_comments())
-            reviews = list(pr.get_reviews())
+            issue_comments: list[IssueCommentLikeProtocol] = list(pr.get_issue_comments())
+            reviews: list[ReviewLikeProtocol] = list(pr.get_reviews())
             should_dedupe = has_prior_codex_review(reviews, issue_comments)
         if review_comments is None:
             review_comments = list(pr.get_review_comments())
@@ -228,7 +311,7 @@ class ReviewWorkflow:
                 findings,
                 existing_struct,
                 rename_map,
-                self.config.repo_root or Path(".").resolve(),
+                self.config.resolved_repo_root,
             )
             dropped_prefilter = before_prefilter - len(findings)
             if dropped_prefilter > 0:
@@ -238,10 +321,14 @@ class ReviewWorkflow:
                 )
 
         file_maps = build_anchor_maps(changed_files)
-        repo_root = self.config.repo_root or Path(".").resolve()
-        persist_anchor_maps(file_maps, repo_root, self.config.context_dir_name or ".codex-context")
+        repo_root = self.config.resolved_repo_root
+        artifacts = ReviewArtifacts(
+            repo_root=repo_root,
+            context_dir_name=self.config.resolved_context_dir_name,
+        )
+        persist_anchor_maps(file_maps, artifacts)
 
-        payloads = build_inline_comment_payloads(
+        build_result = build_inline_comment_payloads(
             findings,
             file_maps,
             rename_map,
@@ -249,16 +336,30 @@ class ReviewWorkflow:
             dry_run=self.config.dry_run,
             debug=self._debug,
         )
-        post_inline_comments(
+        if build_result.dropped_count > 0:
+            print(
+                "Posting dropped "
+                f"{build_result.dropped_count}/{total_findings} findings before GitHub comment creation "
+                f"({build_result.describe_drops()})"
+            )
+        post_result = post_inline_comments(
+            self.github_client,
             pr,
             head_sha,
-            payloads,
+            build_result.payloads,
             dry_run=self.config.dry_run,
             debug=self._debug,
         )
+        return ReviewPostingOutcome(
+            total_findings=total_findings,
+            prefiltered_count=dropped_prefilter,
+            build_result=build_result,
+            post_result=post_result,
+        )
 
-    def _delete_prior_summary(self, pr: PullRequest) -> None:
+    def _delete_prior_summary(self, pr: PullRequestLikeProtocol) -> list[str]:
         """Delete prior Codex summary issue comments."""
+        warnings: list[str] = []
         comments = list(pr.get_issue_comments())
         for comment in comments:
             comment_body = comment.body
@@ -269,6 +370,10 @@ class ReviewWorkflow:
                 comment.delete()
                 self._debug(1, f"Deleted prior summary issue comment id={comment.id}")
             except Exception as exc:
+                warning = f"Failed to delete prior summary issue comment id={comment.id}: {exc}"
+                warnings.append(warning)
                 self._debug(
-                    1, f"Failed to delete prior summary issue comment id={comment.id}: {exc}"
+                    1,
+                    warning,
                 )
+        return warnings

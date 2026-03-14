@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from cli.config import ReviewConfig
-from cli.review_prompt import PromptBuilder
+from cli.core.config import ReviewConfig
+from cli.review.review_prompt import load_guidelines
 from cli.workflows.review_workflow import ReviewWorkflow
 
 
@@ -16,8 +16,7 @@ def _make_review_config() -> ReviewConfig:
 
 
 def test_load_guidelines_include_repo_standard_comment_format() -> None:
-    builder = PromptBuilder(_make_review_config())
-    guidelines = builder.load_guidelines()
+    guidelines = load_guidelines(_make_review_config())
 
     assert "REVIEW COMMENT FORMAT (REPO STANDARD):" in guidelines
     assert "**Current code:**" in guidelines

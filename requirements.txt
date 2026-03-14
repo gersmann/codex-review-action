@@ -1,1 +1,3 @@
-PyGithub
+codex-python==1.114.*
+PyGithub==2.8.1
+pydantic==2.12.5

@@ -2,20 +2,26 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
-from github.IssueComment import IssueComment
-from github.PullRequestComment import PullRequestComment
-
-from ..models import ExistingReviewComment, FindingLocation
-from ..patch_parser import to_relative_path
+from ..core.github_types import (
+    IssueCommentLikeProtocol,
+    ReviewCommentLikeProtocol,
+    ReviewLikeProtocol,
+)
+from ..core.models import (
+    ExistingReviewComment,
+    FindingLocation,
+    ReviewCommentSnapshot,
+    ReviewFinding,
+)
+from .patch_parser import to_relative_path
 
 SUMMARY_MARKER = "Codex Autonomous Review:"
 
 
 def has_prior_codex_review(
-    reviews: Sequence[Any],
-    issue_comments: Sequence[Any],
+    reviews: Sequence[ReviewLikeProtocol],
+    issue_comments: Sequence[IssueCommentLikeProtocol],
 ) -> bool:
     for review in reviews:
         review_body = review.body
@@ -23,48 +29,46 @@ def has_prior_codex_review(
             return True
 
     for issue_comment in issue_comments:
-        if isinstance(issue_comment, IssueComment) and SUMMARY_MARKER in (issue_comment.body or ""):
+        body = issue_comment.body
+        if isinstance(body, str) and SUMMARY_MARKER in body:
             return True
     return False
 
 
-def collect_existing_comment_texts(review_comments: Sequence[Any]) -> list[str]:
+def collect_existing_comment_texts(
+    review_comments: Sequence[ReviewCommentLikeProtocol],
+) -> list[str]:
     """Collect file/diff review comments for semantic dedupe."""
     texts: list[str] = []
     for review_comment in review_comments:
-        if not isinstance(review_comment, PullRequestComment):
-            continue
-        body = review_comment.body.strip()
-        path = review_comment.path
-        line = review_comment.line or review_comment.original_line
+        comment = _normalize_review_comment(review_comment)
+        body, path, line = comment
         location = f"{path}:{line}" if path and line else path
         prefix = f"[{location}] " if location else ""
         texts.append(prefix + body)
     return texts
 
 
-def collect_existing_review_comments(review_comments: Sequence[Any]) -> list[ExistingReviewComment]:
+def collect_existing_review_comments(
+    review_comments: Sequence[ReviewCommentLikeProtocol],
+) -> list[ExistingReviewComment]:
     items: list[ExistingReviewComment] = []
     for review_comment in review_comments:
-        if not isinstance(review_comment, PullRequestComment):
-            continue
-
-        body = review_comment.body.strip()
-        path = review_comment.path
-        line = review_comment.line or review_comment.original_line
+        comment = _normalize_review_comment(review_comment)
+        body, path, line = comment
         if body and path and isinstance(line, int):
             items.append(ExistingReviewComment(path=path, line=int(line), body=body))
     return items
 
 
 def prefilter_duplicates_by_location(
-    findings: list[dict[str, Any]],
+    findings: list[ReviewFinding],
     existing: Sequence[ExistingReviewComment],
     rename_map: dict[str, str],
     repo_root: Path,
     *,
     window: int = 3,
-) -> list[dict[str, Any]]:
+) -> list[ReviewFinding]:
     """Drop findings that are already covered by nearby inline comments."""
     index: dict[str, set[int]] = {}
     for item in existing:
@@ -76,12 +80,9 @@ def prefilter_duplicates_by_location(
     if not index:
         return findings
 
-    filtered: list[dict[str, Any]] = []
+    filtered: list[ReviewFinding] = []
     for finding in findings:
-        location = FindingLocation.from_finding(finding)
-        if not location.absolute_file_path or location.start_line <= 0:
-            filtered.append(finding)
-            continue
+        location = FindingLocation.from_review_finding(finding)
 
         rel_path = to_relative_path(location.absolute_file_path, repo_root)
         rel_path = rename_map.get(rel_path, rel_path)
@@ -99,3 +100,10 @@ def prefilter_duplicates_by_location(
             filtered.append(finding)
 
     return filtered
+
+
+def _normalize_review_comment(
+    review_comment: ReviewCommentLikeProtocol,
+) -> tuple[str, str, int | None]:
+    snapshot = ReviewCommentSnapshot.from_review_comment(review_comment)
+    return snapshot.body, snapshot.path, snapshot.prompt_line
