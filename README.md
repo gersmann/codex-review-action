@@ -15,6 +15,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  issues: write
 jobs:
   review:
     runs-on: ubuntu-latest
@@ -50,16 +51,16 @@ jobs:
     name: Act on /codex comments
     if: >-
       (
-        github.event_name == 'issue_comment' &&
-        startsWith(github.event.comment.body, '/codex') &&
-        github.event.issue.pull_request &&
-        contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.comment.author_association)
-      ) || (
-        github.event_name == 'pull_request_review_comment' &&
-        startsWith(github.event.comment.body, '/codex') &&
-        contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.comment.author_association)
-      )
-      && github.actor != 'dependabot[bot]'
+        (
+          github.event_name == 'issue_comment' &&
+          startsWith(github.event.comment.body, '/codex') &&
+          github.event.issue.pull_request
+        ) || (
+          github.event_name == 'pull_request_review_comment' &&
+          startsWith(github.event.comment.body, '/codex')
+        )
+      ) &&
+      github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,11 +81,13 @@ jobs:
         with:
           mode: act
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          allowed_commenter_associations: MEMBER,OWNER,COLLABORATOR
 ```
 
 ### `/codex` Commands
 
 - **`/codex <instructions>`** — apply minimal diffs matching the instructions.
+- Bare **`/codex`** is ignored; include explicit instructions after the command.
 - **`/codex address comments`** (or natural variants like "please fix the review comments") — address unresolved review threads. Only unresolved threads are considered; resolved threads are ignored.
 
 ## Inputs
@@ -94,18 +97,18 @@ jobs:
 | `openai_api_key` | OpenAI API key | *required* |
 | `mode` | `review` or `act` | `review` |
 | **Model** | | |
-| `model` | Model name | `gpt-5.1-codex-max` |
+| `model` | Model name | `gpt-5.4` |
 | `reasoning_effort` | `minimal` / `low` / `medium` / `high` | `medium` |
 | **Review-only** | | |
 | `additional_prompt` | Extra reviewer instructions (verbatim) | |
 | **Act-only** | | |
 | `act_instructions` | Extra guidance appended to the edit prompt | |
+| `allowed_commenter_associations` | Comma-separated GitHub `author_association` values allowed to trigger Act mode | `MEMBER,OWNER,COLLABORATOR` |
 | `dry_run` | `0` or `1` — skip push | `0` |
 | **Debug** | | |
 | `debug_level` | `0` (off) / `1` (basic) / `2` (trace) | `1` |
 | `stream_agent_messages` | `0` or `1` — stream model output to logs | `1` |
 | **Advanced** | | |
-| `codex_python_version` | `codex-python` version spec | `==1.0.1` |
 | `extra_pip_args` | Additional pip flags (e.g., `--index-url`) | |
 
 ## What It Posts
@@ -116,14 +119,16 @@ jobs:
 
 ## Deduplication on Repeated Runs
 
-When a prior Codex review exists on the PR, findings are deduplicated in two ways:
+When a prior Codex review exists on the PR, reruns only reuse **unresolved Codex-authored review threads** as context.
 
-1. **Inline semantic dedup** — existing review comments are passed to the model's structured-output turn so it can exclude redundant findings at generation time.
-2. **Location prefilter** — a cheap post-hoc safety net that drops any finding if an inline comment already exists on the same file within a few lines.
+1. **Inline semantic dedup** — prior unresolved Codex comments are passed to the model's structured-output turn so it can avoid reposting the same issue as a new finding.
+2. **Re-adjudicated carry-forward** — the model separately marks which of those prior unresolved Codex comments are still relevant now. Only those count toward the PR summary.
+3. **Separated counts** — the summary reports new findings from the current run separately from prior Codex findings that still appear relevant.
 
 ## Security & Permissions
 
-- Restrict Act triggers to trusted roles via `author_association` (shown in the example).
+- Act mode also enforces a built-in `author_association` allowlist. Keep the workflow-level `if:` guard as defense in depth if you want early job skipping.
+- Invalid `allowed_commenter_associations` values fail fast at startup so auth policy drift is visible immediately.
 - For forks, the default `GITHUB_TOKEN` generally cannot push — run Act only on branches in the main repo, or use a PAT with fork access.
 - Grant only what's needed: `contents: write` (push), `pull-requests: write` (reviews), `issues: write` (summary comments and Act replies).
 
@@ -140,6 +145,13 @@ uv sync                # install deps
 make lint              # format, lint, type-check
 GITHUB_TOKEN=… OPENAI_API_KEY=… PYTHONPATH=. python -m cli.main \
   --repo owner/repo --pr 123 --mode review --dry-run
+```
+
+Optional: test against a local checkout of `codex-python` instead of PyPI:
+
+```bash
+uv sync
+uv pip install --editable ../codex-python
 ```
 
 ## Release & Versioning

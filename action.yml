@@ -16,7 +16,7 @@ inputs:
   model:
     description: "Model to use (e.g., gpt-5, gpt-4.1-mini)"
     required: false
-    default: "gpt-5.1-codex-max"
+    default: "gpt-5.4"
   reasoning_effort:
     description: "Reasoning effort: minimal | low | medium | high"
     required: false
@@ -41,14 +41,14 @@ inputs:
     description: "Additional instructions for act mode (autonomous editing)"
     required: false
     default: ""
+  allowed_commenter_associations:
+    description: "Comma-separated GitHub comment author_association values allowed to trigger act mode"
+    required: false
+    default: "MEMBER,OWNER,COLLABORATOR"
   additional_prompt:
     description: "Extra reviewer instructions appended to the review prompt (verbatim)"
     required: false
     default: ""
-  codex_python_version:
-    description: "Version spec for codex-python on PyPI (e.g., '==1.0.0')"
-    required: false
-    default: "==1.0.1"
   extra_pip_args:
     description: "Additional pip arguments (e.g., --index-url)"
     required: false
@@ -64,7 +64,6 @@ runs:
         valid_efforts="minimal low medium high"
         valid_search_modes="disabled cached live"
         contains_word() { case " $1 " in *" $2 "*) return 0;; *) return 1;; esac; }
-        codex_version_spec="${{ inputs.codex_python_version }}"
         # Mode
         case "${{ inputs.mode }}" in review|act) :;; *) echo "::error::Invalid mode: ${{ inputs.mode }} (allowed: review|act)"; exit 2;; esac
         # Reasoning efforts
@@ -75,20 +74,11 @@ runs:
         if ! contains_word "$valid_search_modes" "${{ inputs.web_search_mode }}"; then
           echo "::error::Invalid web_search_mode: ${{ inputs.web_search_mode }} (allowed: disabled|cached|live)"; exit 2;
         fi
-        # SDK compatibility (this action expects codex-python 1.x API)
-        if echo "$codex_version_spec" | grep -Eq '(^|[<>=~! ,])(0\.|2\.)'; then
-          echo "::error::Invalid codex_python_version: ${codex_version_spec}. This action requires codex-python >=1.0 <2.0."
-          exit 2
-        fi
     - name: Install Python dependencies
       shell: bash
       run: |
         set -euo pipefail
         python3 -m pip install --upgrade pip
-        if [ -n "${{ inputs.codex_python_version }}" ]; then
-          # Pin codex-python first.
-          python3 -m pip install ${{ inputs.extra_pip_args }} "codex-python${{ inputs.codex_python_version }}"
-        fi
         python3 -m pip install ${{ inputs.extra_pip_args }} -r "${{ github.action_path }}/requirements.txt"
 
     - name: Run Codex autonomous review (CLI)
@@ -103,6 +93,7 @@ runs:
         CODEX_REASONING_EFFORT: ${{ inputs.reasoning_effort }}
         CODEX_WEB_SEARCH_MODE: ${{ inputs.web_search_mode }}
         CODEX_ACT_INSTRUCTIONS: ${{ inputs.act_instructions }}
+        CODEX_ALLOWED_COMMENTER_ASSOCIATIONS: ${{ inputs.allowed_commenter_associations }}
         CODEX_ADDITIONAL_PROMPT: ${{ inputs.additional_prompt }}
         DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
         DRY_RUN: ${{ inputs.dry_run }}

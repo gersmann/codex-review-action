@@ -4,8 +4,6 @@ from __future__ import annotations
 class CodexReviewError(Exception):
     """Base exception for codex review operations."""
 
-    pass
-
 
 class GitHubAPIError(CodexReviewError):
     """GitHub API related errors."""
@@ -18,22 +16,18 @@ class GitHubAPIError(CodexReviewError):
 class ConfigurationError(CodexReviewError):
     """Configuration validation errors."""
 
-    pass
-
 
 class PatchParsingError(CodexReviewError):
     """Patch parsing related errors."""
-
-    pass
 
 
 class CodexExecutionError(CodexReviewError):
     """Codex execution related errors."""
 
-    pass
-
 
 class PromptError(CodexReviewError):
     """Prompt composition or loading errors."""
 
-    pass
+
+class ReviewContractError(CodexReviewError):
+    """Structured review payload or metadata contract violations."""

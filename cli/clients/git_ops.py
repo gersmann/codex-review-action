@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import subprocess
+import shutil
+import subprocess  # nosec B404
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+_GIT_COMMAND_TIMEOUT_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -15,40 +18,70 @@ class GitWorktreeSnapshot:
     path_states: dict[str, tuple[bool, str | None]]
 
 
-@dataclass(frozen=True)
-class GitPushResult:
-    """Captured result of a push command."""
+def _git_executable() -> str:
+    git_executable = shutil.which("git")
+    if not git_executable:
+        raise RuntimeError("git executable not found on PATH")
 
-    command: tuple[str, ...]
-    returncode: int
-    stdout: str
-    stderr: str
+    git_path = Path(git_executable)
+    if not git_path.is_absolute():
+        raise RuntimeError(f"git executable path must be absolute, got: {git_executable}")
+    return str(git_path)
 
-    @property
-    def ok(self) -> bool:
-        return self.returncode == 0
+
+def _run_git(
+    args: Sequence[str],
+    *,
+    capture_output: bool = False,
+    text: bool = True,
+    check: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Run a git command through a single validated subprocess boundary.
+
+    This wrapper only executes the `git` binary with argument vectors and never
+    uses a shell. Callers pass git subcommands and refs, not arbitrary shell
+    fragments.
+    """
+    command = [_git_executable(), *args]
+    return subprocess.run(  # nosec B603
+        command,
+        capture_output=capture_output,
+        text=text,
+        check=check,
+        timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
+    )
+
+
+def _raise_git_result_error(result: subprocess.CompletedProcess[str]) -> None:
+    raise subprocess.CalledProcessError(
+        result.returncode,
+        result.args,
+        result.stdout,
+        result.stderr,
+    )
 
 
 def git_has_changes() -> bool:
-    result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+    result = _run_git(["status", "--porcelain"], capture_output=True)
+    if result.returncode != 0:
+        _raise_git_result_error(result)
     return bool(result.stdout.strip())
 
 
 def git_status_pretty() -> None:
-    subprocess.run(["git", "status", "--short"], check=False)
+    _run_git(["status", "--short"])
 
 
 def git_setup_identity() -> None:
-    subprocess.run(
+    _run_git(
         [
-            "git",
             "config",
             "user.email",
             "github-actions[bot]@users.noreply.github.com",
         ],
         check=True,
     )
-    subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
+    _run_git(["config", "user.name", "github-actions[bot]"], check=True)
 
 
 def git_commit_paths(message: str, paths: Sequence[str]) -> bool:
@@ -57,8 +90,8 @@ def git_commit_paths(message: str, paths: Sequence[str]) -> bool:
     if not normalized_paths:
         return False
 
-    subprocess.run(["git", "add", "--", *normalized_paths], check=True)
-    staged_check = subprocess.run(["git", "diff", "--cached", "--quiet"], check=False)
+    _run_git(["add", "--", *normalized_paths], check=True)
+    staged_check = _run_git(["diff", "--cached", "--quiet"])
     if staged_check.returncode == 0:
         return False
     if staged_check.returncode > 1:
@@ -69,7 +102,7 @@ def git_commit_paths(message: str, paths: Sequence[str]) -> bool:
             staged_check.stderr,
         )
 
-    subprocess.run(["git", "commit", "-m", message], check=True)
+    _run_git(["commit", "-m", message], check=True)
     return True
 
 
@@ -97,31 +130,38 @@ def git_changed_paths_since_snapshot(
 
 
 def git_current_head_sha() -> str | None:
-    """Return current HEAD SHA, or None if unavailable."""
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    """Return current HEAD SHA.
+
+    Returns:
+        SHA string for HEAD, or ``None`` when git returned an empty value.
+
+    Raises:
+        subprocess.CalledProcessError: Git probe failed.
+    """
+    result = _run_git(["rev-parse", "HEAD"], capture_output=True)
     if result.returncode != 0:
-        return None
+        _raise_git_result_error(result)
     sha = result.stdout.strip()
     return sha or None
 
 
-def git_remote_head_sha(branch: str | None) -> str | None:
-    """Return the remote head SHA for a branch, or None when missing."""
-    if not branch:
+def git_remote_head_sha(branch: str | None, *, remote: str = "origin") -> str | None:
+    """Return remote head SHA for a branch.
+
+    Returns:
+        SHA string for the remote branch, or ``None`` when branch/remote input is empty
+        or the branch does not exist on the remote.
+
+    Raises:
+        subprocess.CalledProcessError: Git probe failed for reasons other than a missing branch.
+    """
+    if not branch or not remote:
         return None
-    result = subprocess.run(
-        ["git", "ls-remote", "--heads", "origin", branch],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_git(["ls-remote", "--exit-code", "--heads", remote, branch], capture_output=True)
+    if result.returncode == 2:
+        return None
     if result.returncode != 0:
-        return None
+        _raise_git_result_error(result)
     first_line = (result.stdout.strip().splitlines() or [""])[0]
     if not first_line:
         return None
@@ -130,12 +170,14 @@ def git_remote_head_sha(branch: str | None) -> str | None:
 
 
 def git_is_ancestor(older_sha: str, newer_sha: str) -> bool:
-    """Return True when older_sha is an ancestor of newer_sha."""
-    result = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", older_sha, newer_sha],
+    """Return whether ``older_sha`` is an ancestor of ``newer_sha``.
+
+    Raises:
+        subprocess.CalledProcessError: Git probe failed.
+    """
+    result = _run_git(
+        ["merge-base", "--is-ancestor", older_sha, newer_sha],
         capture_output=True,
-        text=True,
-        check=False,
     )
     if result.returncode == 0:
         return True
@@ -150,32 +192,25 @@ def git_is_ancestor(older_sha: str, newer_sha: str) -> bool:
 
 
 def git_rebase_in_progress() -> bool:
-    """Return True when repository is in an active rebase state."""
-    probe = subprocess.run(
-        ["git", "rev-parse", "--verify", "REBASE_HEAD"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    """Return whether repository is in an active rebase state.
+
+    Raises:
+        subprocess.CalledProcessError: Git probe failed.
+    """
+    probe = _run_git(["rev-parse", "--verify", "REBASE_HEAD"], capture_output=True)
     if probe.returncode == 0:
         return True
 
-    git_dir_result = subprocess.run(
-        ["git", "rev-parse", "--git-dir"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    git_dir_result = _run_git(["rev-parse", "--git-dir"], capture_output=True)
     if git_dir_result.returncode != 0:
-        return False
+        _raise_git_result_error(git_dir_result)
     git_dir = Path(git_dir_result.stdout.strip())
     return (git_dir / "rebase-apply").exists() or (git_dir / "rebase-merge").exists()
 
 
-def git_push_force_with_lease(branch: str, expected_remote_sha: str | None) -> GitPushResult:
+def git_push_force_with_lease(branch: str, expected_remote_sha: str | None) -> None:
     """Push rewritten history safely with force-with-lease protection."""
     command = [
-        "git",
         "push",
         "origin",
         f"HEAD:refs/heads/{branch}",
@@ -183,13 +218,9 @@ def git_push_force_with_lease(branch: str, expected_remote_sha: str | None) -> G
     ]
     if expected_remote_sha:
         command.append(f"--force-with-lease=refs/heads/{branch}:{expected_remote_sha}")
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    return GitPushResult(
-        command=tuple(command),
-        returncode=result.returncode,
-        stdout=result.stdout or "",
-        stderr=result.stderr or "",
-    )
+    result = _run_git(command, capture_output=True)
+    if result.returncode != 0:
+        _raise_git_result_error(result)
 
 
 def git_format_called_process_error(exc: subprocess.CalledProcessError, max_lines: int = 12) -> str:
@@ -217,21 +248,27 @@ def git_format_called_process_error(exc: subprocess.CalledProcessError, max_line
 
 def git_push() -> None:
     """Simple git push to the current tracking branch."""
-    subprocess.run(["git", "push"], check=True)
+    _run_git(["push"], check=True)
 
 
 def git_push_head_to_branch(branch: str, debug: Callable[[int, str], None]) -> None:
     """Push HEAD to branch, retrying once with fetch/rebase if needed."""
-    push_cmd = ["git", "push", "origin", f"HEAD:refs/heads/{branch}"]
-    push_result = subprocess.run(push_cmd, capture_output=True, text=True)
+    push_cmd = ["push", "origin", f"HEAD:refs/heads/{branch}"]
+    push_result = _run_git(push_cmd, capture_output=True)
     if push_result.returncode == 0:
         return
 
+    if not _is_non_fast_forward_push_rejection(push_result):
+        raise subprocess.CalledProcessError(
+            push_result.returncode,
+            push_result.args,
+            push_result.stdout,
+            push_result.stderr,
+        )
+
     debug(1, f"Push rejected for {branch}; attempting fetch/rebase.")
 
-    fetch_result = subprocess.run(
-        ["git", "fetch", "origin", branch], capture_output=True, text=True
-    )
+    fetch_result = _run_git(["fetch", "origin", branch], capture_output=True)
     if fetch_result.returncode != 0:
         raise subprocess.CalledProcessError(
             fetch_result.returncode,
@@ -241,9 +278,9 @@ def git_push_head_to_branch(branch: str, debug: Callable[[int, str], None]) -> N
         )
 
     rebase_target = f"origin/{branch}"
-    rebase_result = subprocess.run(["git", "rebase", rebase_target], capture_output=True, text=True)
+    rebase_result = _run_git(["rebase", rebase_target], capture_output=True)
     if rebase_result.returncode != 0:
-        subprocess.run(["git", "rebase", "--abort"], check=False)
+        _run_git(["rebase", "--abort"])
         raise subprocess.CalledProcessError(
             rebase_result.returncode,
             rebase_result.args,
@@ -251,7 +288,7 @@ def git_push_head_to_branch(branch: str, debug: Callable[[int, str], None]) -> N
             rebase_result.stderr,
         )
 
-    final_push_result = subprocess.run(push_cmd, capture_output=True, text=True)
+    final_push_result = _run_git(push_cmd, capture_output=True)
     if final_push_result.returncode != 0:
         raise subprocess.CalledProcessError(
             final_push_result.returncode,
@@ -261,59 +298,80 @@ def git_push_head_to_branch(branch: str, debug: Callable[[int, str], None]) -> N
         )
 
 
+def _is_non_fast_forward_push_rejection(result: subprocess.CompletedProcess[str]) -> bool:
+    if result.returncode == 0:
+        return False
+    stderr = result.stderr.lower() if isinstance(result.stderr, str) else ""
+    stdout = result.stdout.lower() if isinstance(result.stdout, str) else ""
+    text = "\n".join([stderr, stdout])
+    return any(
+        marker in text
+        for marker in (
+            "non-fast-forward",
+            "fetch first",
+            "[rejected]",
+            "failed to push some refs",
+        )
+    )
+
+
 def git_head_is_ahead(branch: str | None) -> bool:
     """Return True if HEAD has commits that are not on the remote branch."""
     ref = None
+    remote = "origin"
+    remote_branch = branch
     if branch:
         ref = f"origin/{branch}"
     else:
-        upstream_result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        upstream_result = _run_git(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
             capture_output=True,
-            text=True,
         )
-        if upstream_result.returncode == 0:
-            ref = upstream_result.stdout.strip()
+        if upstream_result.returncode != 0:
+            return False
+
+        ref = upstream_result.stdout.strip()
+        if not ref:
+            return False
+
+        remote, _, remote_branch = ref.partition("/")
+        if not remote or not remote_branch:
+            return False
 
     if not ref:
-        return True
+        return False
 
-    ls_remote_result = subprocess.run(
-        ["git", "ls-remote", "--exit-code", "--heads", "origin", branch or ""],
-        capture_output=True,
-    )
-    if ls_remote_result.returncode != 0:
-        return True
+    remote_head = git_remote_head_sha(remote_branch, remote=remote)
+    if remote_head is None:
+        return False
 
-    compare_result = subprocess.run(
-        ["git", "rev-list", "--left-right", "--count", f"HEAD...{ref}"],
+    compare_result = _run_git(
+        ["rev-list", "--left-right", "--count", f"HEAD...{ref}"],
         capture_output=True,
-        text=True,
-        check=False,
     )
     if compare_result.returncode != 0:
-        return False
+        _raise_git_result_error(compare_result)
 
     parts = (compare_result.stdout.strip() or "0\t0").split()
     try:
         ahead = int(parts[0]) if parts else 0
     except ValueError:
-        ahead = 0
+        raise RuntimeError(f"unexpected rev-list count output: {compare_result.stdout!r}") from None
     return ahead > 0
 
 
 def _collect_changed_paths() -> set[str]:
     paths: set[str] = set()
     commands = [
-        ["git", "diff", "--name-only", "--"],
-        ["git", "diff", "--cached", "--name-only", "--"],
-        ["git", "ls-files", "--others", "--exclude-standard"],
+        ["diff", "--name-only", "--"],
+        ["diff", "--cached", "--name-only", "--"],
+        ["ls-files", "--others", "--exclude-standard"],
     ]
 
     for command in commands:
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
-        if result.returncode not in (0, 1):
-            continue
+        result = _run_git(command, capture_output=True)
+        if result.returncode != 0:
+            _raise_git_result_error(result)
         for line in result.stdout.splitlines():
             path = line.strip()
             if path:

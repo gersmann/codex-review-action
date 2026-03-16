@@ -12,35 +12,42 @@ This CLI provides autonomous code review capabilities for GitHub pull requests. 
 cli/
 ├── __init__.py
 ├── main.py                    # CLI entry point with argparse
-├── config.py                  # Configuration loading + validation
-├── models.py                  # Typed dataclasses (comments, findings, payloads)
-├── exceptions.py              # Custom exception hierarchy
-├── codex_client.py            # Codex SDK wrapper for streaming + parsing
-├── github_client.py           # GitHub API helpers (PyGithub wrapper)
-├── git_ops.py                 # Git subprocess helpers
-├── review_prompt.py           # Review prompt composition
-├── edit_prompt.py             # ACT prompt/context formatting helpers
-├── context_manager.py         # Context artifact writing
-├── patch_parser.py            # Patch parsing utilities
-├── anchor_engine.py           # Diff anchor resolution utilities
+├── core/
+│   ├── __init__.py
+│   ├── config.py              # Configuration loading + validation
+│   ├── models.py              # Typed dataclasses (comments, findings, payloads)
+│   ├── exceptions.py          # Custom exception hierarchy
+│   └── github_types.py        # Shared typed protocols for GitHub objects
+├── clients/
+│   ├── __init__.py
+│   ├── codex_client.py        # Codex SDK wrapper for streaming + parsing
+│   ├── codex_event_debugger.py # Protocol event debug formatting helpers
+│   ├── github_client.py       # GitHub API helpers (PyGithub wrapper)
+│   └── git_ops.py             # Git subprocess helpers
+├── review/
+│   ├── __init__.py
+│   ├── artifacts.py           # Review artifact persistence + summary rendering
+│   ├── dedupe.py              # Duplicate-detection helpers
+│   ├── posting.py             # Inline comment payload/build/post helpers
+│   ├── review_prompt.py       # Review prompt composition
+│   ├── context_manager.py     # Context artifact writing
+│   ├── patch_parser.py        # Patch parsing utilities
+│   └── anchor_engine.py       # Diff anchor resolution utilities
 ├── workflows/
 │   ├── __init__.py
+│   ├── edit_prompt.py         # ACT prompt/context formatting helpers
 │   ├── review_workflow.py     # Review orchestration
 │   └── edit_workflow.py       # ACT mode orchestration
-└── review/
-    ├── __init__.py
-    ├── dedupe.py              # Duplicate-detection helpers
-    └── posting.py             # Inline comment payload/build/post helpers
 ```
 
 ## Key Improvements
 
 ### 1. **Modular Design**
-- **GitHub API**: PyGithub is wrapped in `github_client.py`; review orchestration lives in `workflows/review_workflow.py`
-- **Codex API**: `codex-python` SDK is wrapped in `codex_client.py`
-- **Patch Processing**: `patch_parser.py` contains utilities for parsing unified diffs
+- **GitHub API**: PyGithub is wrapped in `clients/github_client.py`; review orchestration lives in `workflows/review_workflow.py`
+- **Codex API**: `codex-python` SDK is wrapped in `clients/codex_client.py`
+- **Patch Processing**: `review/patch_parser.py` contains utilities for parsing unified diffs
 - **Configuration**: `ReviewConfig` centralizes all configuration management
-- **Prompt Building**: `PromptBuilder` handles guidelines loading and prompt composition
+- **Prompt Building**: `review/review_prompt.py` provides guideline loading and prompt composition helpers
 - **Review Processing**: `ReviewWorkflow` orchestrates the entire review workflow
 
 ### 2. **Better Error Handling**
@@ -91,7 +98,8 @@ Comment-triggered edits
 
 - Add a comment on the PR that starts with:
   - `/codex <instructions>` or `/codex: <instructions>`
-- The remainder of the comment is passed to the coding agent. The agent runs with plan + apply_patch enabled and AUTO approvals, commits, and pushes changes to the PR head branch (unless dry-run).
+- Bare `/codex` comments are ignored; the command must include instructions.
+- The remainder of the comment is passed to the coding agent. The workflow executes the agent with the configured Codex runtime settings for this environment, then commits and pushes resulting branch changes (unless dry-run).
 
 ### Environment Variables
 
@@ -100,12 +108,15 @@ Comment-triggered edits
 | `GITHUB_TOKEN` | GitHub API token | *Required* |
 | `OPENAI_API_KEY` | OpenAI API key | *Required for OpenAI* |
 | `CODEX_MODE` | Operation mode (review/act) | `review` |
-| `CODEX_MODEL` | Model name | `gpt-5` |
+| `CODEX_MODEL` | Model name | `gpt-5.4` |
 | `CODEX_PROVIDER` | Model provider | `openai` |
 | `CODEX_REASONING_EFFORT` | Reasoning effort level | `medium` |
 | `CODEX_ACT_INSTRUCTIONS` | Additional instructions for act mode | `` |
+| `CODEX_ALLOWED_COMMENTER_ASSOCIATIONS` | Comma-separated GitHub comment roles allowed to trigger act mode | `MEMBER,OWNER,COLLABORATOR` |
 | `DEBUG_CODEREVIEW` | Debug level (0-2) | `0` |
 | `DRY_RUN` | Skip posting (1 for dry run) | `0` |
+
+Invalid `CODEX_ALLOWED_COMMENTER_ASSOCIATIONS` values fail fast during configuration loading.
 
 ## Operation Modes
 
@@ -123,9 +134,10 @@ pytest tests/ -v
 ## Deduplication on Repeated Runs
 
 - The CLI detects if a prior Codex review exists on the PR (looks for a summary containing "Codex Autonomous Review:" or earlier inline review comments).
-- When detected, deduplication happens in two layers:
-  - **Inline semantic dedup**: existing review comments are passed to the model's structured-output turn (turn 2) so it can exclude redundant findings at generation time.
-  - **Location prefilter**: a post-hoc safety net that drops any new finding if an inline comment already exists on the same file within a few lines.
+- When detected, deduplication happens in three layers:
+  - **Codex-thread attribution**: only unresolved review threads whose root author matches a prior Codex summary author are reused as rerun context.
+  - **Inline semantic dedup**: the structured-output turn uses those prior Codex comments to decide which issues are new vs already covered.
+  - **Re-adjudicated summary carry-forward**: the model returns prior comment IDs that still seem relevant, and the summary reports those separately from new findings.
 
 ### Customizing the Review Prompt
 
