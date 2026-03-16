@@ -13,13 +13,13 @@ from cli.core.filesystem import write_text_atomic
 from cli.core.github_types import IssueCommentLikeProtocol, ReviewCommentLikeProtocol
 from cli.core.models import (
     CommentContext,
+    ExistingReviewComment,
     FindingLocation,
     InlineCommentPayload,
     ReviewFinding,
-    ReviewFindingLocation,
     ReviewRunResult,
-    UnresolvedReviewComment,
-    UnresolvedReviewThread,
+    ReviewThreadComment,
+    ReviewThreadSnapshot,
 )
 from cli.main import extract_edit_command, load_github_event
 from cli.review.anchor_engine import RangeAnchor, build_anchor_maps, resolve_range
@@ -27,10 +27,10 @@ from cli.review.artifacts import ReviewArtifacts
 from cli.review.context_manager import ReviewContextWriter
 from cli.review.dedupe import (
     SUMMARY_MARKER,
-    collect_existing_comment_texts,
-    collect_existing_review_comments,
+    collect_codex_author_logins,
+    collect_prior_codex_review_comments,
     has_prior_codex_review,
-    prefilter_duplicates_by_location,
+    render_prior_codex_comments_for_prompt,
 )
 from cli.review.patch_parser import (
     ParsedPatch,
@@ -236,6 +236,7 @@ def test_model_helpers_parse_and_normalize_payloads() -> None:
             "overall_correctness": "ok",
             "overall_explanation": "fine",
             "overall_confidence_score": 0.75,
+            "carried_forward_comment_ids": [],
             "findings": [
                 {
                     "title": "a",
@@ -254,6 +255,7 @@ def test_model_helpers_parse_and_normalize_payloads() -> None:
         "overall_correctness": "ok",
         "overall_explanation": "fine",
         "overall_confidence_score": 0.75,
+        "carried_forward_comment_ids": [],
         "findings": [
             {
                 "title": "a",
@@ -274,6 +276,7 @@ def test_model_helpers_parse_and_normalize_payloads() -> None:
                 "overall_correctness": "ok",
                 "overall_explanation": "fine",
                 "overall_confidence_score": 0.75,
+                "carried_forward_comment_ids": [],
                 "findings": [
                     {
                         "title": "a",
@@ -383,7 +386,7 @@ def test_review_context_writer_marks_invalid_comment_shapes(tmp_path: Path) -> N
     assert "(no review comments available)" not in review_md
 
 
-def test_review_dedupe_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_review_dedupe_helpers() -> None:
     assert has_prior_codex_review([type("R", (), {"body": SUMMARY_MARKER})()], []) is True
     assert (
         has_prior_codex_review(
@@ -393,45 +396,72 @@ def test_review_dedupe_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
         is True
     )
 
-    review_comments = [_FakePullRequestComment("  body  ", path="renamed.py", line=11)]
-    typed_review_comments = cast(list[ReviewCommentLikeProtocol], review_comments)
-    assert collect_existing_comment_texts(typed_review_comments) == ["[renamed.py:11] body"]
-    assert collect_existing_review_comments(typed_review_comments)[0].body == "body"
-
-    repo_root = tmp_path
-    findings = [
-        ReviewFinding.from_mapping(
-            {
-                "title": "duplicate",
-                "body": "",
-                "confidence_score": None,
-                "priority": None,
-                "code_location": {
-                    "absolute_file_path": str((repo_root / "src.py").resolve()),
-                    "line_range": {"start": 10, "end": 12},
-                },
-            }
-        ),
-        ReviewFinding(
-            title="keep",
-            body="",
-            confidence_score=None,
-            priority=None,
-            code_location=ReviewFindingLocation(
-                absolute_file_path=str((repo_root / "other.py").resolve()),
-                start_line=3,
-                end_line=3,
-            ),
-        ),
-    ]
-    filtered = prefilter_duplicates_by_location(
-        findings,
-        collect_existing_review_comments(typed_review_comments),
-        {"renamed.py": "src.py"},
-        repo_root,
-        window=2,
+    issue_comments = cast(
+        list[IssueCommentLikeProtocol],
+        [
+            _FakeIssueComment(f"{SUMMARY_MARKER}\nold summary", login="bot"),
+            _FakeIssueComment("human note", login="alice"),
+        ],
     )
-    assert [finding.title for finding in filtered] == ["keep"]
+    assert collect_codex_author_logins(issue_comments) == {"bot"}
+
+    prior_codex_comments = collect_prior_codex_review_comments(
+        [
+            ReviewThreadSnapshot(
+                id="thread-1",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-1",
+                        body="thread body",
+                        path="renamed.py",
+                        line=11,
+                        original_line=10,
+                        author="bot",
+                    )
+                ],
+            ),
+            ReviewThreadSnapshot(
+                id="thread-2",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-2",
+                        body="human body",
+                        path="other.py",
+                        line=7,
+                        original_line=7,
+                        author="alice",
+                    )
+                ],
+            ),
+            ReviewThreadSnapshot(
+                id="thread-3",
+                is_resolved=True,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-3",
+                        body="resolved body",
+                        path="done.py",
+                        line=5,
+                        original_line=5,
+                        author="bot",
+                    )
+                ],
+            ),
+        ],
+        {"bot"},
+    )
+    assert prior_codex_comments == [
+        ExistingReviewComment(id="comment-1", path="renamed.py", line=11, body="thread body"),
+    ]
+    assert render_prior_codex_comments_for_prompt(prior_codex_comments) == "\n".join(
+        [
+            "<prior_codex_review_comments>",
+            '{"id": "comment-1", "path": "renamed.py", "line": 11, "body": "thread body"}',
+            "</prior_codex_review_comments>",
+        ]
+    )
 
 
 def test_review_posting_helpers_write_and_post(tmp_path: Path) -> None:
@@ -531,7 +561,10 @@ def test_github_client_helpers_cover_normalization_and_replies(
             }
         }
     )
-    assert page.threads == [UnresolvedReviewThread(id="thread-1", comments=[])]
+    assert page.threads == [
+        ReviewThreadSnapshot(id="thread-1", is_resolved=False, comments=[]),
+        ReviewThreadSnapshot(id="thread-2", is_resolved=True, comments=[]),
+    ]
     assert page.has_next_page is True
     assert page.end_cursor == "cursor-1"
 
@@ -545,7 +578,7 @@ def test_github_client_helpers_cover_normalization_and_replies(
             "author": {"login": "octocat"},
         }
     )
-    assert normalized_comment == UnresolvedReviewComment(
+    assert normalized_comment == ReviewThreadComment(
         id="comment-1",
         body="text",
         path="sample.py",

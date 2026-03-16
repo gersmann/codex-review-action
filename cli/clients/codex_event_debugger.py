@@ -22,6 +22,7 @@ class CodexEventDebugger:
     def __init__(self, *, debug_level: int, debug_fn: Callable[[int, str], None]) -> None:
         self._debug_level = debug_level
         self._debug_fn = debug_fn
+        self._last_token_usage: tuple[int, int, int] | None = None
 
     def emit(self, event: BaseModel) -> None:
         if self._debug_level < 1:
@@ -47,6 +48,10 @@ class CodexEventDebugger:
 
         if isinstance(event, protocol.ThreadTokenUsageUpdatedNotificationModel):
             usage = event.params.tokenUsage.last
+            usage_key = (usage.inputTokens, usage.cachedInputTokens, usage.outputTokens)
+            if usage_key == self._last_token_usage:
+                return None
+            self._last_token_usage = usage_key
             return (
                 "thread.token_usage "
                 f"usage in={usage.inputTokens} cached={usage.cachedInputTokens} "

@@ -70,3 +70,42 @@ def test_event_debugger_emits_reasoning_text_delta_at_debug2() -> None:
     debugger.emit(event)
 
     assert messages == [(2, "[codex-reasoning] Think step")]
+
+
+def test_event_debugger_dedupes_repeated_token_usage_summary() -> None:
+    messages: list[tuple[int, str]] = []
+    debugger = CodexEventDebugger(
+        debug_level=1, debug_fn=lambda level, msg: messages.append((level, msg))
+    )
+
+    event = protocol.ThreadTokenUsageUpdatedNotificationModel.model_validate(
+        {
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "tokenUsage": {
+                    "last": {
+                        "inputTokens": 7,
+                        "cachedInputTokens": 2,
+                        "outputTokens": 3,
+                        "reasoningOutputTokens": 1,
+                        "totalTokens": 10,
+                    },
+                    "total": {
+                        "inputTokens": 7,
+                        "cachedInputTokens": 2,
+                        "outputTokens": 3,
+                        "reasoningOutputTokens": 1,
+                        "totalTokens": 10,
+                    },
+                    "modelContextWindow": 1000,
+                },
+            },
+        }
+    )
+
+    debugger.emit(event)
+    debugger.emit(event)
+
+    assert messages == [(1, "[codex-event] thread.token_usage usage in=7 cached=2 out=3")]

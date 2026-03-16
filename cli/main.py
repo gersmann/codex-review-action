@@ -297,9 +297,20 @@ def _run_mode_workflow(config: ReviewConfig) -> int:
     workflow = ReviewWorkflow(config)
     result = workflow.process_review(config.pr_number)
 
-    findings_count = len(result.review.findings)
-    overall = result.review.overall_correctness
-    print(f"\nReview completed: {overall}, {findings_count} findings")
+    summary = result.summary
+    if summary.carried_forward_count > 0:
+        print(
+            "\nReview completed: "
+            f"{summary.overall_correctness}, "
+            f"{summary.current_findings_count} new findings, "
+            f"{summary.carried_forward_count} prior findings still relevant "
+            f"({summary.active_findings_count} active total)"
+        )
+    else:
+        print(
+            "\nReview completed: "
+            f"{summary.overall_correctness}, {summary.current_findings_count} findings"
+        )
     return 0
 
 

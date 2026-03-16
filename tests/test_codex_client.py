@@ -413,6 +413,35 @@ def test_execute_structured_runs_second_turn_with_schema(
     assert second_turn_options.output_schema == schema
 
 
+def test_execute_structured_raises_when_schema_turn_emits_no_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+        "additionalProperties": False,
+    }
+    _FakeCodex.thread = _FakeThread(
+        [
+            _FakeStream(iter([_turn_completed()]), final_text="Intermediate prose"),
+            _FakeStream(iter([_turn_completed()])),
+        ]
+    )
+    monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
+    client = CodexClient(_make_config())
+
+    with pytest.raises(
+        CodexExecutionError,
+        match="Codex did not return structured output on turn 2.",
+    ):
+        client.execute_structured(
+            "prompt",
+            output_schema=schema,
+            schema_prompt="Return the JSON now.",
+        )
+
+
 def test_execute_text_falls_back_to_medium_reasoning_effort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

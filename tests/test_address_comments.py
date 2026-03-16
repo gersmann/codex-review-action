@@ -12,7 +12,7 @@ from cli.core.models import CommentContext, ReviewRunResult, UnresolvedReviewCom
 from cli.review.posting import ReviewPostingOutcome
 from cli.workflows.edit_prompt import CommentContextRenderResult
 from cli.workflows.edit_workflow import EditWorkflow, _wants_fix_unresolved
-from cli.workflows.review_workflow import SUMMARY_TIP, _build_review_summary
+from cli.workflows.review_workflow import SUMMARY_TIP, ReviewSummary, _build_review_summary
 
 
 def _make_ep() -> EditWorkflow:
@@ -243,6 +243,13 @@ def test_review_summary_mentions_address_comments_tip() -> None:
             overall_explanation="",
             overall_confidence_score=None,
             findings=[],
+            carried_forward_comment_ids=[],
+        ),
+        ReviewSummary(
+            overall_correctness="patch is correct",
+            current_findings_count=0,
+            carried_forward_count=0,
+            active_findings_count=0,
         ),
         ReviewPostingOutcome.empty(0),
     )

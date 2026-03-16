@@ -134,9 +134,10 @@ pytest tests/ -v
 ## Deduplication on Repeated Runs
 
 - The CLI detects if a prior Codex review exists on the PR (looks for a summary containing "Codex Autonomous Review:" or earlier inline review comments).
-- When detected, deduplication happens in two layers:
-  - **Inline semantic dedup**: existing review comments are passed to the model's structured-output turn (turn 2) so it can exclude redundant findings at generation time.
-  - **Location prefilter**: a post-hoc safety net that drops any new finding if an inline comment already exists on the same file within a few lines.
+- When detected, deduplication happens in three layers:
+  - **Codex-thread attribution**: only unresolved review threads whose root author matches a prior Codex summary author are reused as rerun context.
+  - **Inline semantic dedup**: the structured-output turn uses those prior Codex comments to decide which issues are new vs already covered.
+  - **Re-adjudicated summary carry-forward**: the model returns prior comment IDs that still seem relevant, and the summary reports those separately from new findings.
 
 ### Customizing the Review Prompt
 

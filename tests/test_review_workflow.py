@@ -9,10 +9,10 @@ import pytest
 
 from cli.core.config import ReviewConfig
 from cli.core.exceptions import CodexExecutionError, ReviewContractError
-from cli.core.models import InlineCommentPayload
+from cli.core.models import InlineCommentPayload, ReviewThreadComment, ReviewThreadSnapshot
 from cli.review.artifacts import ReviewArtifacts
 from cli.review.posting import ReviewPostingOutcome
-from cli.workflows.review_workflow import SUMMARY_MARKER, ReviewWorkflow
+from cli.workflows.review_workflow import SUMMARY_MARKER, ReviewSummary, ReviewWorkflow
 
 
 @dataclass
@@ -56,6 +56,7 @@ class _FakeChangedFile:
 
 class _FakeReviewComment:
     def __init__(self, body: str, *, path: str = "src.py", line: int = 3) -> None:
+        self.id = 1
         self.body = body
         self.path = path
         self.line = line
@@ -74,12 +75,13 @@ class _FakeIssueComment:
         *,
         comment_id: int = 1,
         fail_on_delete: bool = False,
+        login: str = "commenter",
     ) -> None:
         self.body = body
         self.id = comment_id
         self.deleted = False
         self.fail_on_delete = fail_on_delete
-        self.user = _FakeUser("commenter")
+        self.user = _FakeUser(login)
         self.created_at = "now"
 
     def delete(self) -> None:
@@ -102,6 +104,7 @@ class _FakePR:
         *,
         issue_comments: list[_FakeIssueComment] | None = None,
         review_comments: list[_FakeReviewComment] | None = None,
+        review_threads: list[ReviewThreadSnapshot] | None = None,
         changed_files: list[_FakeChangedFile] | None = None,
     ) -> None:
         self.number = 7
@@ -115,6 +118,23 @@ class _FakePR:
         self.base = _FakeBase()
         self._issue_comments = issue_comments or []
         self._review_comments = review_comments or []
+        self._review_threads = review_threads or [
+            ReviewThreadSnapshot(
+                id=f"thread-{index}",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id=f"comment-{index}",
+                        body=comment.body,
+                        path=comment.path,
+                        line=comment.line,
+                        original_line=comment.original_line,
+                        author=comment.user.login,
+                    )
+                ],
+            )
+            for index, comment in enumerate(self._review_comments, start=1)
+        ]
         self._reviews: list[Any] = []
         self._issue = _FakeIssue()
         self._changed_files = changed_files or [_FakeChangedFile("src.py")]
@@ -144,6 +164,10 @@ class _FakeGitHubClient:
     def get_pr(self, pr_number: int) -> _FakePR:
         self.calls.append(pr_number)
         return self.pr
+
+    def get_review_threads(self, pr: _FakePR) -> list[ReviewThreadSnapshot]:
+        assert pr is self.pr
+        return list(self.pr._review_threads)
 
     def post_inline_comment(
         self,
@@ -195,7 +219,11 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    prior_summary = _FakeIssueComment(f"{SUMMARY_MARKER}\nold summary", comment_id=10)
+    prior_summary = _FakeIssueComment(
+        f"{SUMMARY_MARKER}\nold summary",
+        comment_id=10,
+        login="reviewer",
+    )
     existing_review_comment = _FakeReviewComment("already reported")
     pr = _FakePR(
         issue_comments=[prior_summary],
@@ -208,6 +236,7 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
                 "overall_correctness": "patch is incorrect",
                 "overall_explanation": "Needs one fix.",
                 "overall_confidence_score": 0.9,
+                "carried_forward_comment_ids": [],
                 "findings": [
                     {
                         "title": "Example finding",
@@ -233,7 +262,7 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
     post_calls: list[dict[str, Any]] = []
 
     def _capture_post_results(
-        result, changed_files, current_pr, head_sha, rename_map, **kwargs
+        result, changed_files, current_pr, head_sha, rename_map
     ) -> ReviewPostingOutcome:
         post_calls.append(
             {
@@ -242,7 +271,6 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
                 "pr": current_pr,
                 "head_sha": head_sha,
                 "rename_map": rename_map,
-                **kwargs,
             }
         )
         return ReviewPostingOutcome.empty(len(result.findings))
@@ -266,15 +294,22 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
     )
     assert context_writes[0][2:] == (1, 1)
     assert codex_client.calls[0]["sandbox_mode"] == "danger-full-access"
-    assert "[src.py:3] already reported" in codex_client.calls[0]["schema_prompt"]
+    assert "<prior_codex_review_comments>" in codex_client.calls[0]["schema_prompt"]
+    assert '"id": "comment-1"' in codex_client.calls[0]["schema_prompt"]
+    assert '"path": "src.py"' in codex_client.calls[0]["schema_prompt"]
     assert prior_summary.deleted is True
     assert len(pr.as_issue().created_comments) == 1
     assert SUMMARY_MARKER in pr.as_issue().created_comments[0]
     assert "Needs one fix." in pr.as_issue().created_comments[0]
     assert post_calls[0]["head_sha"] == "head-sha"
-    assert post_calls[0]["prior_codex_review"] is True
-    assert post_calls[0]["review_comments_snapshot"] == [existing_review_comment]
     assert result.review.overall_correctness == "patch is incorrect"
+    assert result.review.carried_forward_comment_ids == []
+    assert result.summary == ReviewSummary(
+        overall_correctness="patch is incorrect",
+        current_findings_count=1,
+        carried_forward_count=0,
+        active_findings_count=1,
+    )
     assert [finding.as_dict() for finding in result.review.findings] == [
         {
             "title": "Example finding",
@@ -285,7 +320,7 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
                 "absolute_file_path": str((tmp_path / "src.py").resolve()),
                 "line_range": {"start": 1, "end": 1},
             },
-        }
+        },
     ]
 
 
@@ -341,6 +376,69 @@ def test_process_review_dry_run_skips_summary_comment(
     assert pr.as_issue().created_comments == []
     assert post_calls[0]["pr"] is pr
     assert post_calls[0]["head_sha"] == "head-sha"
+
+
+def test_process_review_summary_counts_carried_forward_codex_comments(tmp_path: Path) -> None:
+    pr = _FakePR(
+        issue_comments=[
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\nold summary",
+                comment_id=10,
+                login="reviewer",
+            )
+        ],
+        review_threads=[
+            ReviewThreadSnapshot(
+                id="thread-1",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-1",
+                        body="🔴 [P1] Existing finding",
+                        path="src.py",
+                        line=2,
+                        original_line=2,
+                        author="reviewer",
+                    )
+                ],
+            )
+        ],
+    )
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, _FakeGitHubClient(pr)),
+        codex_client=cast(
+            Any,
+            _FakeCodexClient(
+                json.dumps(
+                    {
+                        "overall_correctness": "patch is correct",
+                        "overall_explanation": "No additional non-redundant findings.",
+                        "overall_confidence_score": 0.8,
+                        "carried_forward_comment_ids": ["comment-1"],
+                        "findings": [],
+                    }
+                )
+            ),
+        ),
+    )
+
+    result = workflow.process_review(7)
+
+    assert result.review.overall_correctness == "patch is correct"
+    assert result.review.findings == []
+    assert result.review.carried_forward_comment_ids == ["comment-1"]
+    assert result.summary == ReviewSummary(
+        overall_correctness="patch is incorrect",
+        current_findings_count=0,
+        carried_forward_count=1,
+        active_findings_count=1,
+    )
+    assert "- New findings this run: 0" in pr.as_issue().created_comments[0]
+    assert (
+        "- Prior unresolved Codex findings still relevant: 1" in pr.as_issue().created_comments[0]
+    )
+    assert "- Active findings total: 1" in pr.as_issue().created_comments[0]
 
 
 def test_process_review_warns_when_prior_summary_delete_fails(
@@ -586,12 +684,20 @@ def test_process_review_wires_real_artifacts_and_inline_posting(tmp_path: Path) 
     }
 
 
-def test_process_review_renamed_file_dedupes_existing_inline_comments(tmp_path: Path) -> None:
+def test_process_review_renamed_file_posts_current_findings_without_prefilter(
+    tmp_path: Path,
+) -> None:
     renamed_file = tmp_path / "new_name.py"
     renamed_file.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
 
     pr = _FakePR(
-        issue_comments=[_FakeIssueComment(f"{SUMMARY_MARKER}\nold summary", comment_id=21)],
+        issue_comments=[
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\nold summary",
+                comment_id=21,
+                login="reviewer",
+            )
+        ],
         review_comments=[_FakeReviewComment("existing", path="new_name.py", line=1)],
         changed_files=[
             _FakeChangedFile(
@@ -609,17 +715,8 @@ def test_process_review_renamed_file_dedupes_existing_inline_comments(tmp_path: 
                 "overall_correctness": "patch is incorrect",
                 "overall_explanation": "Needs one follow-up.",
                 "overall_confidence_score": 0.8,
+                "carried_forward_comment_ids": [],
                 "findings": [
-                    {
-                        "title": "Duplicate finding",
-                        "body": "Already covered.",
-                        "confidence_score": 0.9,
-                        "priority": 1,
-                        "code_location": {
-                            "absolute_file_path": str((tmp_path / "old_name.py").resolve()),
-                            "line_range": {"start": 1, "end": 1},
-                        },
-                    },
                     {
                         "title": "New finding",
                         "body": "Not covered.",
@@ -646,6 +743,148 @@ def test_process_review_renamed_file_dedupes_existing_inline_comments(tmp_path: 
     assert github_client.inline_comments[0]["path"] == "new_name.py"
     assert github_client.inline_comments[0]["line"] == 5
 
-    assert result.posting_outcome.total_findings == 2
-    assert result.posting_outcome.prefiltered_count == 1
+    assert result.posting_outcome.total_findings == 1
+    assert result.posting_outcome.prefiltered_count == 0
     assert result.posting_outcome.published_count == 1
+
+
+def test_process_review_ignores_non_codex_threads_in_rerun_context(tmp_path: Path) -> None:
+    sample_file = tmp_path / "src.py"
+    sample_file.write_text("old\nnew\n", encoding="utf-8")
+
+    pr = _FakePR(
+        issue_comments=[
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\nold summary",
+                comment_id=10,
+                login="codex-bot",
+            )
+        ],
+        review_threads=[
+            ReviewThreadSnapshot(
+                id="thread-1",
+                is_resolved=True,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-0",
+                        body="Resolved Codex finding",
+                        path="src.py",
+                        line=1,
+                        original_line=1,
+                        author="codex-bot",
+                    )
+                ],
+            ),
+            ReviewThreadSnapshot(
+                id="thread-2",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-1",
+                        body="🔴 [P1] Existing finding",
+                        path="src.py",
+                        line=2,
+                        original_line=2,
+                        author="human-reviewer",
+                    )
+                ],
+            ),
+        ],
+        changed_files=[
+            _FakeChangedFile(
+                "src.py",
+                patch="@@ -1,1 +1,2 @@\n old\n+new\n",
+            )
+        ],
+    )
+    github_client = _FakeGitHubClient(pr)
+    fake_codex = _FakeCodexClient(
+        json.dumps(
+            {
+                "overall_correctness": "patch is incorrect",
+                "overall_explanation": "Still broken.",
+                "overall_confidence_score": 0.9,
+                "carried_forward_comment_ids": ["comment-1"],
+                "findings": [
+                    {
+                        "title": "🔴 [P1] Existing finding",
+                        "body": "Still broken.",
+                        "confidence_score": 0.9,
+                        "priority": 1,
+                        "code_location": {
+                            "absolute_file_path": str(sample_file.resolve()),
+                            "line_range": {"start": 2, "end": 2},
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, github_client),
+        codex_client=cast(Any, fake_codex),
+    )
+
+    result = workflow.process_review(7)
+
+    assert "<prior_codex_review_comments>" not in fake_codex.calls[0]["schema_prompt"]
+    assert result.posting_outcome.prefiltered_count == 0
+    assert len(github_client.inline_comments) == 1
+    assert result.review.carried_forward_comment_ids == []
+    assert [finding.title for finding in result.review.findings] == ["🔴 [P1] Existing finding"]
+
+
+def test_process_review_drops_invalid_carried_forward_comment_ids(tmp_path: Path) -> None:
+    pr = _FakePR(
+        issue_comments=[
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\nold summary",
+                comment_id=10,
+                login="reviewer",
+            )
+        ],
+        review_threads=[
+            ReviewThreadSnapshot(
+                id="thread-1",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-1",
+                        body="Existing finding",
+                        path="src.py",
+                        line=2,
+                        original_line=2,
+                        author="reviewer",
+                    )
+                ],
+            )
+        ],
+    )
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, _FakeGitHubClient(pr)),
+        codex_client=cast(
+            Any,
+            _FakeCodexClient(
+                json.dumps(
+                    {
+                        "overall_correctness": "patch is correct",
+                        "overall_explanation": "",
+                        "overall_confidence_score": 0.8,
+                        "carried_forward_comment_ids": [
+                            "comment-unknown",
+                            "comment-1",
+                            "comment-1",
+                        ],
+                        "findings": [],
+                    }
+                )
+            ),
+        ),
+    )
+
+    result = workflow.process_review(7)
+
+    assert result.review.carried_forward_comment_ids == ["comment-1"]
+    assert result.summary.carried_forward_count == 1

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .exceptions import ReviewContractError
@@ -168,6 +168,7 @@ class ReviewFinding:
 class ExistingReviewComment:
     """Structured inline review comment used for local dedupe."""
 
+    id: str
     path: str
     line: int
     body: str
@@ -220,6 +221,31 @@ class ReviewCommentSnapshot:
             if isinstance(comment.in_reply_to_id, int)
             else None,
         )
+
+
+@dataclass(frozen=True)
+class ReviewThreadComment:
+    """Normalized review-thread comment snapshot from GraphQL."""
+
+    id: str
+    body: str
+    path: str
+    line: int | None
+    original_line: int | None
+    author: str = ""
+
+    @property
+    def prompt_line(self) -> int | None:
+        return self.line if self.line is not None else self.original_line
+
+
+@dataclass(frozen=True)
+class ReviewThreadSnapshot:
+    """Normalized review thread snapshot with resolution state."""
+
+    id: str
+    is_resolved: bool
+    comments: list[ReviewThreadComment]
 
 
 @dataclass(frozen=True)
@@ -279,6 +305,7 @@ class ReviewRunResult:
     overall_explanation: str
     overall_confidence_score: float | None
     findings: list[ReviewFinding]
+    carried_forward_comment_ids: list[str] = field(default_factory=list)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> ReviewRunResult:
@@ -323,11 +350,25 @@ class ReviewRunResult:
         overall_confidence_score = (
             float(confidence_raw) if isinstance(confidence_raw, (int, float)) else None
         )
+        carried_forward_raw = payload.get("carried_forward_comment_ids", [])
+        if not isinstance(carried_forward_raw, list):
+            raise ReviewContractError(
+                "Review output field 'carried_forward_comment_ids' must be an array"
+            )
+        carried_forward_comment_ids: list[str] = []
+        for index, item in enumerate(carried_forward_raw):
+            if not isinstance(item, str):
+                raise ReviewContractError(
+                    "Review output field 'carried_forward_comment_ids' "
+                    f"item at index {index} must be a string"
+                )
+            carried_forward_comment_ids.append(item)
         return cls(
             overall_correctness=overall_correctness,
             overall_explanation=overall_explanation,
             overall_confidence_score=overall_confidence_score,
             findings=findings,
+            carried_forward_comment_ids=carried_forward_comment_ids,
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -336,6 +377,7 @@ class ReviewRunResult:
             "overall_explanation": self.overall_explanation,
             "overall_confidence_score": self.overall_confidence_score,
             "findings": [finding.as_dict() for finding in self.findings],
+            "carried_forward_comment_ids": list(self.carried_forward_comment_ids),
         }
 
 
@@ -379,12 +421,17 @@ REVIEW_OUTPUT_SCHEMA: dict[str, object] = {
                 "additionalProperties": False,
             },
         },
+        "carried_forward_comment_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
         "overall_correctness": {"type": "string"},
         "overall_explanation": {"type": "string"},
         "overall_confidence_score": {"type": ["number", "null"]},
     },
     "required": [
         "findings",
+        "carried_forward_comment_ids",
         "overall_correctness",
         "overall_explanation",
         "overall_confidence_score",

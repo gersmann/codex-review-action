@@ -99,14 +99,11 @@ class CodexClient:
             reasoning_effort=reasoning_effort,
             suppress_stream=suppress_stream,
             sandbox_mode=sandbox_mode,
-            session_runner=lambda thread, effort, stream_enabled, streaming_state: (
-                self._run_text_session(
-                    thread=thread,
-                    prompt=prompt,
-                    effort=effort,
-                    stream_enabled=stream_enabled,
-                    streaming_state=streaming_state,
-                )
+            session_runner=lambda thread, effort, stream_enabled: self._run_text_session(
+                thread=thread,
+                prompt=prompt,
+                effort=effort,
+                stream_enabled=stream_enabled,
             ),
         )
 
@@ -127,16 +124,13 @@ class CodexClient:
             reasoning_effort=reasoning_effort,
             suppress_stream=suppress_stream,
             sandbox_mode=sandbox_mode,
-            session_runner=lambda thread, effort, stream_enabled, streaming_state: (
-                self._run_structured_session(
-                    thread=thread,
-                    prompt=prompt,
-                    output_schema=output_schema,
-                    schema_prompt=schema_prompt,
-                    effort=effort,
-                    stream_enabled=stream_enabled,
-                    streaming_state=streaming_state,
-                )
+            session_runner=lambda thread, effort, stream_enabled: self._run_structured_session(
+                thread=thread,
+                prompt=prompt,
+                output_schema=output_schema,
+                schema_prompt=schema_prompt,
+                effort=effort,
+                stream_enabled=stream_enabled,
             ),
         )
 
@@ -147,18 +141,17 @@ class CodexClient:
         reasoning_effort: str | None,
         suppress_stream: bool,
         sandbox_mode: str,
-        session_runner: Callable[[Thread, str, bool, _StreamingAgentMessageState], str],
+        session_runner: Callable[[Thread, str, bool], str],
     ) -> str:
         effort = self._resolve_effort(reasoning_effort)
         stream_enabled = self._should_stream(suppress_stream)
-        streaming_state = _StreamingAgentMessageState()
 
         try:
             thread = self._create_thread(
                 model_name=model_name,
                 sandbox_mode=sandbox_mode,
             )
-            return session_runner(thread, effort, stream_enabled, streaming_state)
+            return session_runner(thread, effort, stream_enabled)
         except ThreadRunError as run_err:
             raise CodexExecutionError(f"Codex execution failed: {run_err}") from run_err
         except CodexExecutionError:
@@ -173,8 +166,8 @@ class CodexClient:
         prompt: str,
         effort: str,
         stream_enabled: bool,
-        streaming_state: _StreamingAgentMessageState,
     ) -> str:
+        streaming_state = _StreamingAgentMessageState()
         result, parse_errors_seen = self._run_turn(
             thread=thread,
             prompt=prompt,
@@ -197,21 +190,22 @@ class CodexClient:
         schema_prompt: str,
         effort: str,
         stream_enabled: bool,
-        streaming_state: _StreamingAgentMessageState,
     ) -> str:
+        interactive_turn_state = _StreamingAgentMessageState()
         self._run_turn(
             thread=thread,
             prompt=prompt,
             effort=effort,
             stream_enabled=stream_enabled,
-            streaming_state=streaming_state,
+            streaming_state=interactive_turn_state,
         )
+        schema_turn_state = _StreamingAgentMessageState()
         result, parse_errors_seen = self._run_turn(
             thread=thread,
             prompt=schema_prompt,
             effort=effort,
             stream_enabled=False,
-            streaming_state=streaming_state,
+            streaming_state=schema_turn_state,
             output_schema=output_schema,
         )
         return self._require_turn_result(

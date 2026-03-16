@@ -15,6 +15,8 @@ from ..core.github_types import (
 )
 from ..core.models import (
     InlineCommentPayload,
+    ReviewThreadComment,
+    ReviewThreadSnapshot,
     UnresolvedReviewComment,
     UnresolvedReviewThread,
 )
@@ -24,6 +26,7 @@ class GitHubClientProtocol(Protocol):
     """Interface for GitHub client used by workflows."""
 
     def get_pr(self, pr_number: int) -> PullRequestLikeProtocol: ...
+    def get_review_threads(self, pr: PullRequestLikeProtocol) -> list[ReviewThreadSnapshot]: ...
     def get_unresolved_threads(
         self, pr: PullRequestLikeProtocol
     ) -> list[UnresolvedReviewThread]: ...
@@ -71,9 +74,9 @@ class GitHubClient:
             target = f"{self._config.owner}/{self._config.repo_name}#{pr_number}"
             raise _wrap_github_error(f"failed to load pull request {target}", exc) from exc
 
-    def get_unresolved_threads(self, pr: PullRequestLikeProtocol) -> list[UnresolvedReviewThread]:
+    def get_review_threads(self, pr: PullRequestLikeProtocol) -> list[ReviewThreadSnapshot]:
         owner, repo_name, pr_number = _resolve_pr_identity(pr)
-        threads: list[UnresolvedReviewThread] = []
+        threads: list[ReviewThreadSnapshot] = []
         cursor: str | None = None
 
         while True:
@@ -98,6 +101,29 @@ class GitHubClient:
             if not page.end_cursor:
                 raise GitHubAPIError("missing endCursor for paginated reviewThreads response")
             cursor = page.end_cursor
+
+    def get_unresolved_threads(self, pr: PullRequestLikeProtocol) -> list[UnresolvedReviewThread]:
+        unresolved_threads: list[UnresolvedReviewThread] = []
+        for thread in self.get_review_threads(pr):
+            if thread.is_resolved:
+                continue
+            unresolved_threads.append(
+                UnresolvedReviewThread(
+                    id=thread.id,
+                    comments=[
+                        UnresolvedReviewComment(
+                            id=comment.id,
+                            body=comment.body,
+                            path=comment.path,
+                            line=comment.line,
+                            original_line=comment.original_line,
+                            author=comment.author,
+                        )
+                        for comment in thread.comments
+                    ],
+                )
+            )
+        return unresolved_threads
 
     def post_inline_comment(
         self,
@@ -189,7 +215,7 @@ query ReviewThreads($owner: String!, $name: String!, $number: Int!, $after: Stri
 
 @dataclass(frozen=True)
 class ReviewThreadsPage:
-    threads: list[UnresolvedReviewThread]
+    threads: list[ReviewThreadSnapshot]
     has_next_page: bool
     end_cursor: str | None
 
@@ -295,8 +321,8 @@ def _require_bool_field(
     return value
 
 
-def _normalize_threads(nodes: list[object]) -> list[UnresolvedReviewThread]:
-    threads: list[UnresolvedReviewThread] = []
+def _normalize_threads(nodes: list[object]) -> list[ReviewThreadSnapshot]:
+    threads: list[ReviewThreadSnapshot] = []
     for node in nodes:
         if not isinstance(node, Mapping):
             continue
@@ -307,14 +333,13 @@ def _normalize_threads(nodes: list[object]) -> list[UnresolvedReviewThread]:
     return threads
 
 
-def _normalize_thread(thread: Mapping[str, object]) -> UnresolvedReviewThread | None:
-    if thread.get("isResolved") is True:
-        return None
+def _normalize_thread(thread: Mapping[str, object]) -> ReviewThreadSnapshot | None:
     thread_id_value = thread.get("id")
     if not isinstance(thread_id_value, str) or not thread_id_value:
         return None
     thread_id = thread_id_value
-    comments: list[UnresolvedReviewComment] = []
+    comments: list[ReviewThreadComment] = []
+    is_resolved = thread.get("isResolved") is True
 
     comments_connection = thread.get("comments")
     if isinstance(comments_connection, Mapping):
@@ -328,10 +353,10 @@ def _normalize_thread(thread: Mapping[str, object]) -> UnresolvedReviewThread | 
                     continue
                 comments.append(normalized_comment)
 
-    return UnresolvedReviewThread(id=thread_id, comments=comments)
+    return ReviewThreadSnapshot(id=thread_id, is_resolved=is_resolved, comments=comments)
 
 
-def _normalize_comment(comment: Mapping[str, object]) -> UnresolvedReviewComment | None:
+def _normalize_comment(comment: Mapping[str, object]) -> ReviewThreadComment | None:
     comment_id_value = comment.get("id")
     if not isinstance(comment_id_value, str) or not comment_id_value:
         return None
@@ -353,7 +378,7 @@ def _normalize_comment(comment: Mapping[str, object]) -> UnresolvedReviewComment
     if not isinstance(path_value, str) or not path_value:
         return None
 
-    return UnresolvedReviewComment(
+    return ReviewThreadComment(
         id=comment_id,
         body=body_value if isinstance(body_value, str) else "",
         path=path_value,

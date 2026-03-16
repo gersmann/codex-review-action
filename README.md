@@ -119,10 +119,11 @@ jobs:
 
 ## Deduplication on Repeated Runs
 
-When a prior Codex review exists on the PR, findings are deduplicated in two ways:
+When a prior Codex review exists on the PR, reruns only reuse **unresolved Codex-authored review threads** as context.
 
-1. **Inline semantic dedup** — existing review comments are passed to the model's structured-output turn so it can exclude redundant findings at generation time.
-2. **Location prefilter** — a cheap post-hoc safety net that drops any finding if an inline comment already exists on the same file within a few lines.
+1. **Inline semantic dedup** — prior unresolved Codex comments are passed to the model's structured-output turn so it can avoid reposting the same issue as a new finding.
+2. **Re-adjudicated carry-forward** — the model separately marks which of those prior unresolved Codex comments are still relevant now. Only those count toward the PR summary.
+3. **Separated counts** — the summary reports new findings from the current run separately from prior Codex findings that still appear relevant.
 
 ## Security & Permissions
 
