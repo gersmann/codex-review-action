@@ -33,8 +33,12 @@ def _make_review_result(
                 "overall_correctness": "patch is correct",
                 "overall_explanation": "",
                 "overall_confidence_score": None,
-                "carried_forward_comment_ids": [
-                    f"comment-{index}" for index in range(carried_forward_count)
+                "carried_forward": [
+                    {
+                        "comment_id": f"comment-{index}",
+                        "current_evidence": f"evidence-{index}",
+                    }
+                    for index in range(carried_forward_count)
                 ],
                 "findings": findings,
             }

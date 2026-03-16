@@ -68,6 +68,19 @@ class _FakeReviewComment:
         self.created_at = "now"
 
 
+def _structured_review_body(
+    current_code: str,
+    *,
+    problem: str = "Still broken.",
+    language: str = "python",
+) -> str:
+    return (
+        f"**Current code:**\n```{language}\n{current_code}\n```\n\n"
+        f"**Problem:** {problem}\n\n"
+        f"**Fix:**\n```{language}\n{current_code}\n```\n\n---"
+    )
+
+
 class _FakeIssueComment:
     def __init__(
         self,
@@ -219,12 +232,13 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    (tmp_path / "src.py").write_text("value = 1\n", encoding="utf-8")
     prior_summary = _FakeIssueComment(
         f"{SUMMARY_MARKER}\nold summary",
         comment_id=10,
         login="reviewer",
     )
-    existing_review_comment = _FakeReviewComment("already reported")
+    existing_review_comment = _FakeReviewComment(_structured_review_body("value = 1"))
     pr = _FakePR(
         issue_comments=[prior_summary],
         review_comments=[existing_review_comment],
@@ -236,7 +250,7 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
                 "overall_correctness": "patch is incorrect",
                 "overall_explanation": "Needs one fix.",
                 "overall_confidence_score": 0.9,
-                "carried_forward_comment_ids": [],
+                "carried_forward": [],
                 "findings": [
                     {
                         "title": "Example finding",
@@ -297,6 +311,7 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
     assert "<prior_codex_review_comments>" in codex_client.calls[0]["schema_prompt"]
     assert '"id": "comment-1"' in codex_client.calls[0]["schema_prompt"]
     assert '"path": "src.py"' in codex_client.calls[0]["schema_prompt"]
+    assert '"current_code": "value = 1"' in codex_client.calls[0]["schema_prompt"]
     assert prior_summary.deleted is True
     assert len(pr.as_issue().created_comments) == 1
     assert SUMMARY_MARKER in pr.as_issue().created_comments[0]
@@ -340,6 +355,7 @@ def test_process_review_dry_run_skips_summary_comment(
                         "overall_correctness": "patch is correct",
                         "overall_explanation": "",
                         "overall_confidence_score": None,
+                        "carried_forward": [],
                         "findings": [],
                     }
                 )
@@ -379,6 +395,7 @@ def test_process_review_dry_run_skips_summary_comment(
 
 
 def test_process_review_summary_counts_carried_forward_codex_comments(tmp_path: Path) -> None:
+    (tmp_path / "src.py").write_text("value = 1\n", encoding="utf-8")
     pr = _FakePR(
         issue_comments=[
             _FakeIssueComment(
@@ -394,7 +411,7 @@ def test_process_review_summary_counts_carried_forward_codex_comments(tmp_path: 
                 comments=[
                     ReviewThreadComment(
                         id="comment-1",
-                        body="🔴 [P1] Existing finding",
+                        body=_structured_review_body("value = 1"),
                         path="src.py",
                         line=2,
                         original_line=2,
@@ -415,7 +432,12 @@ def test_process_review_summary_counts_carried_forward_codex_comments(tmp_path: 
                         "overall_correctness": "patch is correct",
                         "overall_explanation": "No additional non-redundant findings.",
                         "overall_confidence_score": 0.8,
-                        "carried_forward_comment_ids": ["comment-1"],
+                        "carried_forward": [
+                            {
+                                "comment_id": "comment-1",
+                                "current_evidence": "value = 1",
+                            }
+                        ],
                         "findings": [],
                     }
                 )
@@ -463,6 +485,7 @@ def test_process_review_warns_when_prior_summary_delete_fails(
                         "overall_correctness": "patch is correct",
                         "overall_explanation": "",
                         "overall_confidence_score": None,
+                        "carried_forward": [],
                         "findings": [],
                     }
                 )
@@ -572,6 +595,7 @@ def test_process_review_raises_domain_error_for_missing_head_sha(
                         "overall_correctness": "patch is correct",
                         "overall_explanation": "",
                         "overall_confidence_score": None,
+                        "carried_forward": [],
                         "findings": [],
                     }
                 )
@@ -603,6 +627,7 @@ def test_process_review_raises_domain_error_for_issue_comment_snapshot_failure(
                 "overall_correctness": "patch is correct",
                 "overall_explanation": "",
                 "overall_confidence_score": None,
+                "carried_forward": [],
                 "findings": [],
             }
         )
@@ -639,6 +664,7 @@ def test_process_review_wires_real_artifacts_and_inline_posting(tmp_path: Path) 
                 "overall_correctness": "patch is incorrect",
                 "overall_explanation": "Needs one focused fix.",
                 "overall_confidence_score": 0.8,
+                "carried_forward": [],
                 "findings": [
                     {
                         "title": "Example finding",
@@ -715,7 +741,7 @@ def test_process_review_renamed_file_posts_current_findings_without_prefilter(
                 "overall_correctness": "patch is incorrect",
                 "overall_explanation": "Needs one follow-up.",
                 "overall_confidence_score": 0.8,
-                "carried_forward_comment_ids": [],
+                "carried_forward": [],
                 "findings": [
                     {
                         "title": "New finding",
@@ -804,7 +830,12 @@ def test_process_review_ignores_non_codex_threads_in_rerun_context(tmp_path: Pat
                 "overall_correctness": "patch is incorrect",
                 "overall_explanation": "Still broken.",
                 "overall_confidence_score": 0.9,
-                "carried_forward_comment_ids": ["comment-1"],
+                "carried_forward": [
+                    {
+                        "comment_id": "comment-1",
+                        "current_evidence": "old",
+                    }
+                ],
                 "findings": [
                     {
                         "title": "🔴 [P1] Existing finding",
@@ -836,6 +867,7 @@ def test_process_review_ignores_non_codex_threads_in_rerun_context(tmp_path: Pat
 
 
 def test_process_review_drops_invalid_carried_forward_comment_ids(tmp_path: Path) -> None:
+    (tmp_path / "src.py").write_text("value = 1\n", encoding="utf-8")
     pr = _FakePR(
         issue_comments=[
             _FakeIssueComment(
@@ -851,7 +883,7 @@ def test_process_review_drops_invalid_carried_forward_comment_ids(tmp_path: Path
                 comments=[
                     ReviewThreadComment(
                         id="comment-1",
-                        body="Existing finding",
+                        body=_structured_review_body("value = 1"),
                         path="src.py",
                         line=2,
                         original_line=2,
@@ -872,10 +904,19 @@ def test_process_review_drops_invalid_carried_forward_comment_ids(tmp_path: Path
                         "overall_correctness": "patch is correct",
                         "overall_explanation": "",
                         "overall_confidence_score": 0.8,
-                        "carried_forward_comment_ids": [
-                            "comment-unknown",
-                            "comment-1",
-                            "comment-1",
+                        "carried_forward": [
+                            {
+                                "comment_id": "comment-unknown",
+                                "current_evidence": "value = 1",
+                            },
+                            {
+                                "comment_id": "comment-1",
+                                "current_evidence": "not the same snippet",
+                            },
+                            {
+                                "comment_id": "comment-1",
+                                "current_evidence": "value = 1",
+                            },
                         ],
                         "findings": [],
                     }

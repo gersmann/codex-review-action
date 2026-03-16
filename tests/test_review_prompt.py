@@ -27,7 +27,9 @@ def test_load_guidelines_include_repo_standard_comment_format() -> None:
     assert "Skip comments for formatting-only issues, personal style preferences" in guidelines
 
     # Preserve required JSON output fields.
-    assert '"carried_forward_comment_ids": ["<prior review comment id>", "..."]' in guidelines
+    assert '"carried_forward": [' in guidelines
+    assert '"comment_id": "<prior review comment id>"' in guidelines
+    assert '"current_evidence": "<exact current-code snippet copied verbatim>"' in guidelines
     assert '"overall_correctness": "patch is correct" | "patch is incorrect"' in guidelines
     assert '"code_location": {' in guidelines
 

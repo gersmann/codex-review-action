@@ -236,7 +236,7 @@ def test_model_helpers_parse_and_normalize_payloads() -> None:
             "overall_correctness": "ok",
             "overall_explanation": "fine",
             "overall_confidence_score": 0.75,
-            "carried_forward_comment_ids": [],
+            "carried_forward": [],
             "findings": [
                 {
                     "title": "a",
@@ -255,7 +255,7 @@ def test_model_helpers_parse_and_normalize_payloads() -> None:
         "overall_correctness": "ok",
         "overall_explanation": "fine",
         "overall_confidence_score": 0.75,
-        "carried_forward_comment_ids": [],
+        "carried_forward": [],
         "findings": [
             {
                 "title": "a",
@@ -276,7 +276,7 @@ def test_model_helpers_parse_and_normalize_payloads() -> None:
                 "overall_correctness": "ok",
                 "overall_explanation": "fine",
                 "overall_confidence_score": 0.75,
-                "carried_forward_comment_ids": [],
+                "carried_forward": [],
                 "findings": [
                     {
                         "title": "a",
@@ -386,7 +386,7 @@ def test_review_context_writer_marks_invalid_comment_shapes(tmp_path: Path) -> N
     assert "(no review comments available)" not in review_md
 
 
-def test_review_dedupe_helpers() -> None:
+def test_review_dedupe_helpers(tmp_path: Path) -> None:
     assert has_prior_codex_review([type("R", (), {"body": SUMMARY_MARKER})()], []) is True
     assert (
         has_prior_codex_review(
@@ -405,6 +405,13 @@ def test_review_dedupe_helpers() -> None:
     )
     assert collect_codex_author_logins(issue_comments) == {"bot"}
 
+    (tmp_path / "renamed.py").write_text("value = 1\n", encoding="utf-8")
+    structured_body = (
+        "**Current code:**\n```python\nvalue = 1\n```\n\n"
+        "**Problem:** still broken.\n\n"
+        "**Fix:**\n```python\nvalue = 1\n```\n\n---"
+    )
+
     prior_codex_comments = collect_prior_codex_review_comments(
         [
             ReviewThreadSnapshot(
@@ -413,7 +420,7 @@ def test_review_dedupe_helpers() -> None:
                 comments=[
                     ReviewThreadComment(
                         id="comment-1",
-                        body="thread body",
+                        body=structured_body,
                         path="renamed.py",
                         line=11,
                         original_line=10,
@@ -427,7 +434,7 @@ def test_review_dedupe_helpers() -> None:
                 comments=[
                     ReviewThreadComment(
                         id="comment-2",
-                        body="human body",
+                        body=structured_body,
                         path="other.py",
                         line=7,
                         original_line=7,
@@ -437,10 +444,28 @@ def test_review_dedupe_helpers() -> None:
             ),
             ReviewThreadSnapshot(
                 id="thread-3",
-                is_resolved=True,
+                is_resolved=False,
                 comments=[
                     ReviewThreadComment(
                         id="comment-3",
+                        body=(
+                            "**Current code:**\n```python\nvalue = 2\n```\n\n"
+                            "**Problem:** stale.\n\n"
+                            "**Fix:**\n```python\nvalue = 2\n```\n\n---"
+                        ),
+                        path="renamed.py",
+                        line=5,
+                        original_line=5,
+                        author="bot",
+                    )
+                ],
+            ),
+            ReviewThreadSnapshot(
+                id="thread-4",
+                is_resolved=True,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-4",
                         body="resolved body",
                         path="done.py",
                         line=5,
@@ -451,14 +476,21 @@ def test_review_dedupe_helpers() -> None:
             ),
         ],
         {"bot"},
+        tmp_path,
     )
     assert prior_codex_comments == [
-        ExistingReviewComment(id="comment-1", path="renamed.py", line=11, body="thread body"),
+        ExistingReviewComment(
+            id="comment-1",
+            path="renamed.py",
+            line=11,
+            body=structured_body,
+            current_code="value = 1",
+        ),
     ]
     assert render_prior_codex_comments_for_prompt(prior_codex_comments) == "\n".join(
         [
             "<prior_codex_review_comments>",
-            '{"id": "comment-1", "path": "renamed.py", "line": 11, "body": "thread body"}',
+            '{"id": "comment-1", "path": "renamed.py", "line": 11, "current_code": "value = 1", "body": "**Current code:**\\n```python\\nvalue = 1\\n```\\n\\n**Problem:** still broken.\\n\\n**Fix:**\\n```python\\nvalue = 1\\n```\\n\\n---"}',
             "</prior_codex_review_comments>",
         ]
     )

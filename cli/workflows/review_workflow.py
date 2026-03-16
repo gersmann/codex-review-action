@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 from ..clients.codex_client import CodexClient
 from ..clients.github_client import GitHubClient, GitHubClientProtocol
@@ -16,6 +17,7 @@ from ..core.github_types import (
 )
 from ..core.models import (
     REVIEW_OUTPUT_SCHEMA,
+    CarriedForwardReviewComment,
     ExistingReviewComment,
     ReviewRunResult,
 )
@@ -143,15 +145,15 @@ class ReviewWorkflow:
             lines.append(
                 "Produce the JSON review output now. "
                 'Use "findings" only for new, non-redundant findings from this review run. '
-                'Use "carried_forward_comment_ids" only for ids from prior_codex_review_comments '
+                'Use "carried_forward" only for entries from prior_codex_review_comments '
                 "that still describe live issues in the current patch. "
+                "For each carried_forward entry, copy the exact current_code snippet into "
+                '"current_evidence" verbatim. '
                 "Do not include stale or fixed comments. "
-                "Do not include a carried-forward id for an issue already captured in findings."
+                "Do not include a carried-forward entry for an issue already captured in findings."
             )
         else:
-            lines.append(
-                'Produce the JSON review output now. Return "carried_forward_comment_ids" as [].'
-            )
+            lines.append('Produce the JSON review output now. Return "carried_forward" as [].')
         return "\n".join(lines)
 
     def _build_rename_map(self, changed_files: list[ChangedFileProtocol]) -> dict[str, str]:
@@ -184,7 +186,12 @@ class ReviewWorkflow:
                 f" - {changed_file.filename} status={changed_file.status} patch_len={patch_len}",
             )
 
-    def _capture_review_snapshots(self, pr: PullRequestLikeProtocol) -> _ReviewSnapshots:
+    def _capture_review_snapshots(
+        self,
+        pr: PullRequestLikeProtocol,
+        *,
+        repo_root: Path,
+    ) -> _ReviewSnapshots:
         try:
             review_comments_snapshot = list(pr.get_review_comments())
         except Exception as exc:
@@ -210,6 +217,7 @@ class ReviewWorkflow:
             prior_codex_comments = collect_prior_codex_review_comments(
                 review_threads_snapshot,
                 codex_author_logins,
+                repo_root,
             )
         return _ReviewSnapshots(
             review_comments=review_comments_snapshot,
@@ -222,45 +230,56 @@ class ReviewWorkflow:
         result: ReviewRunResult,
         prior_codex_comments: list[ExistingReviewComment],
     ) -> ReviewRunResult:
-        carried_forward_comment_ids = self._normalize_carried_forward_comment_ids(
-            result.carried_forward_comment_ids,
+        carried_forward = self._normalize_carried_forward(
+            result.carried_forward,
             prior_codex_comments,
         )
-        if carried_forward_comment_ids == result.carried_forward_comment_ids:
+        if carried_forward == result.carried_forward:
             return result
         return ReviewRunResult(
             overall_correctness=result.overall_correctness,
             overall_explanation=result.overall_explanation,
             overall_confidence_score=result.overall_confidence_score,
             findings=list(result.findings),
-            carried_forward_comment_ids=carried_forward_comment_ids,
+            carried_forward=carried_forward,
         )
 
-    def _normalize_carried_forward_comment_ids(
+    def _normalize_carried_forward(
         self,
-        raw_comment_ids: list[str],
+        raw_carried_forward: list[CarriedForwardReviewComment],
         prior_codex_comments: list[ExistingReviewComment],
-    ) -> list[str]:
-        valid_comment_ids = {comment.id for comment in prior_codex_comments}
-        normalized_comment_ids: list[str] = []
+    ) -> list[CarriedForwardReviewComment]:
+        valid_comments = {comment.id: comment for comment in prior_codex_comments}
+        normalized_carried_forward: list[CarriedForwardReviewComment] = []
         seen_comment_ids: set[str] = set()
         dropped_count = 0
-        for comment_id in raw_comment_ids:
-            if comment_id in seen_comment_ids or comment_id not in valid_comment_ids:
+        for carried_forward in raw_carried_forward:
+            comment_id = carried_forward.comment_id
+            valid_comment = valid_comments.get(comment_id)
+            if comment_id in seen_comment_ids or valid_comment is None:
                 dropped_count += 1
                 continue
-            normalized_comment_ids.append(comment_id)
+            current_evidence = carried_forward.current_evidence.strip()
+            if current_evidence != valid_comment.current_code.strip():
+                dropped_count += 1
+                continue
+            normalized_carried_forward.append(
+                CarriedForwardReviewComment(
+                    comment_id=comment_id,
+                    current_evidence=valid_comment.current_code,
+                )
+            )
             seen_comment_ids.add(comment_id)
         if dropped_count > 0:
             self._debug(
                 1,
-                f"Dropped {dropped_count} invalid carried_forward_comment_ids from structured output",
+                f"Dropped {dropped_count} invalid carried_forward entries from structured output",
             )
-        return normalized_comment_ids
+        return normalized_carried_forward
 
     def _build_summary(self, review: ReviewRunResult) -> ReviewSummary:
         current_findings_count = len(review.findings)
-        carried_forward_count = len(review.carried_forward_comment_ids)
+        carried_forward_count = len(review.carried_forward)
         active_findings_count = current_findings_count + carried_forward_count
         overall_correctness = review.overall_correctness.strip()
         if not overall_correctness:
@@ -320,7 +339,7 @@ class ReviewWorkflow:
         repo_root = self.config.resolved_repo_root
         context_dir_name = self.config.resolved_context_dir_name
         artifacts = ReviewArtifacts(repo_root=repo_root, context_dir_name=context_dir_name)
-        snapshots = self._capture_review_snapshots(pr)
+        snapshots = self._capture_review_snapshots(pr, repo_root=repo_root)
         self.context_manager.write_context_artifacts(
             pr,
             artifacts,

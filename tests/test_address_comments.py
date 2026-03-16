@@ -243,7 +243,7 @@ def test_review_summary_mentions_address_comments_tip() -> None:
             overall_explanation="",
             overall_confidence_score=None,
             findings=[],
-            carried_forward_comment_ids=[],
+            carried_forward=[],
         ),
         ReviewSummary(
             overall_correctness="patch is correct",
