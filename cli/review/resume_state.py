@@ -4,13 +4,13 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
-
-from codex.app_server import AppServerClient, AppServerProcessOptions, AppServerThreadListOptions
-from codex.app_server.models import ThreadListResult
-from codex.protocol import types as protocol
+from typing import TYPE_CHECKING, Any
 
 from ..core.exceptions import ReviewResumeError
+
+if TYPE_CHECKING:
+    from codex.app_server.models import ThreadListResult
+    from codex.protocol import types as protocol
 
 SUMMARY_METADATA_RE = re.compile(r"<!--\s*codex-review-meta\s+({.*?})\s*-->")
 REVIEW_RESUME_CACHE_VERSION = "v1"
@@ -128,6 +128,12 @@ def load_latest_thread_id(codex_home: Path, cwd: Path) -> str:
 
 
 def _list_stored_threads(*, codex_home: Path, cwd: Path) -> list[protocol.Thread]:
+    from codex.app_server import (
+        AppServerClient,
+        AppServerProcessOptions,
+        AppServerThreadListOptions,
+    )
+
     process_options = AppServerProcessOptions(env={"CODEX_HOME": str(codex_home)})
     list_options = AppServerThreadListOptions(cwd=str(cwd.resolve()))
     all_threads: list[protocol.Thread] = []
