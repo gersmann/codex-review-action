@@ -87,6 +87,7 @@ def build_review_resume_outputs(
 ) -> dict[str, str]:
     codex_home = str(Path(runner_temp or ".").resolve() / "codex-review-state")
     restore_key = ""
+    restore_key_prefix = ""
     current_cache_key = ""
 
     if pr_number and repository and model_name and current_head_sha:
@@ -103,11 +104,17 @@ def build_review_resume_outputs(
             model_name,
             previous_reviewed_sha,
         )
+    if pr_number and repository:
+        restore_key_prefix = (
+            f"codex-review-{REVIEW_RESUME_CACHE_VERSION}-"
+            f"{_sanitize_cache_component(repository)}-pr-{pr_number}-"
+        )
 
     return {
         "codex_home": codex_home,
         "previous_reviewed_sha": previous_reviewed_sha or "",
         "restore_key": restore_key,
+        "restore_key_prefix": restore_key_prefix,
         "current_cache_key": current_cache_key,
     }
 

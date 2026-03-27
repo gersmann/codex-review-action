@@ -746,10 +746,12 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
     workflow_yaml = Path(".github/workflows/codex-review.yml").read_text(encoding="utf-8")
 
     assert (
-        "steps.review_codex_cache.outputs.cache-hit == 'true' && "
-        "steps.review_resume_state.outputs.restore_key == "
+        "steps.review_codex_cache.outputs.cache-matched-key != "
         "steps.review_resume_state.outputs.current_cache_key"
     ) in action_yaml
+    assert "restore-keys: |" in action_yaml
+    assert "steps.review_resume_state.outputs.restore_key_prefix" in action_yaml
+    assert "CODEX_REVIEW_RESTORED_KEY" in action_yaml
     assert "model: gpt-5.4" in workflow_yaml
     assert "model: gpt-5.1-codex-max" not in workflow_yaml
 
