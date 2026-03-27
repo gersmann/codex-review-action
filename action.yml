@@ -131,7 +131,7 @@ runs:
         PYTHONPATH="${{ github.action_path }}:${PYTHONPATH:-}" \
           python3 -m cli.main
     - name: Save review Codex cache
-      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' }}
+      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' && steps.review_codex_cache.outputs.cache-hit != 'true' }}
       uses: actions/cache/save@v4
       with:
         path: ${{ steps.review_resume_state.outputs.codex_home }}
