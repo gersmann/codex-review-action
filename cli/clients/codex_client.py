@@ -470,7 +470,6 @@ class CodexClient:
                         model=resolved_model_name,
                         sandbox=cast(Any, resolved_sandbox_mode),
                         config=cast(Any, self._thread_config()),
-                        persist_extended_history=True,
                     ),
                 )
             except Exception as exc:
@@ -483,7 +482,6 @@ class CodexClient:
                 model=resolved_model_name,
                 sandbox=cast(Any, resolved_sandbox_mode),
                 config=cast(Any, self._thread_config()),
-                persist_extended_history=True,
             )
         )
 

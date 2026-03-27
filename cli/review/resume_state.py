@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 SUMMARY_METADATA_RE = re.compile(r"<!--\s*codex-review-meta\s+({.*?})\s*-->")
 SESSION_INDEX_PATH = "session_index.jsonl"
@@ -47,6 +49,66 @@ def compute_review_cache_key(
         f"codex-review-{REVIEW_RESUME_CACHE_VERSION}-"
         f"{sanitized_repository}-pr-{pr_number}-{sanitized_model_name}-{sanitized_sha}"
     )
+
+
+def extract_current_head_sha(event: Mapping[str, Any]) -> str:
+    pull_request = event.get("pull_request")
+    if not isinstance(pull_request, Mapping):
+        return ""
+    head = pull_request.get("head")
+    if not isinstance(head, Mapping):
+        return ""
+    current_head_sha = head.get("sha")
+    if not isinstance(current_head_sha, str):
+        return ""
+    return current_head_sha.strip()
+
+
+def find_previous_reviewed_sha(issue_comments: Sequence[Mapping[str, object]]) -> str | None:
+    for comment in reversed(issue_comments):
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        parsed_sha = parse_reviewed_head_sha(body)
+        if parsed_sha:
+            return parsed_sha
+    return None
+
+
+def build_review_resume_outputs(
+    *,
+    repository: str,
+    pr_number: int | None,
+    model_name: str,
+    runner_temp: str,
+    current_head_sha: str,
+    previous_reviewed_sha: str | None,
+) -> dict[str, str]:
+    codex_home = str(Path(runner_temp or ".").resolve() / "codex-review-state")
+    restore_key = ""
+    current_cache_key = ""
+
+    if pr_number and repository and model_name and current_head_sha:
+        current_cache_key = compute_review_cache_key(
+            repository,
+            pr_number,
+            model_name,
+            current_head_sha,
+        )
+    if pr_number and repository and model_name and previous_reviewed_sha:
+        restore_key = compute_review_cache_key(
+            repository,
+            pr_number,
+            model_name,
+            previous_reviewed_sha,
+        )
+
+    return {
+        "codex_home": codex_home,
+        "previous_reviewed_sha": previous_reviewed_sha or "",
+        "restore_key": restore_key,
+        "current_cache_key": current_cache_key,
+    }
 
 
 def load_latest_thread_id(codex_home: Path) -> str | None:

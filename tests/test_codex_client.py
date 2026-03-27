@@ -538,7 +538,6 @@ def test_execute_structured_resumes_existing_thread(
     assert output == '{"summary":"ok"}'
     assert _FakeCodex.last_resume_thread_id == "thread-123"
     assert _FakeCodex.last_resume_options is not None
-    assert _FakeCodex.last_resume_options.persist_extended_history is True
     assert _FakeCodex.last_options.env == {"CODEX_HOME": os.environ["CODEX_HOME"]}
 
 
@@ -571,7 +570,6 @@ def test_execute_structured_falls_back_to_fresh_thread_when_resume_fails(
     assert output == '{"summary":"ok"}'
     assert _FakeCodex.last_resume_thread_id == "thread-123"
     assert _FakeCodex.last_thread_options is not None
-    assert _FakeCodex.last_thread_options.persist_extended_history is True
 
 
 def test_debug_level1_logs_token_usage_update_summary(
