@@ -75,3 +75,20 @@ def test_load_latest_thread_id_uses_most_recent_updated_at(tmp_path: Path) -> No
 
     assert load_latest_thread_id(tmp_path) == "thread-2"
     assert load_latest_thread_id(tmp_path / "missing") is None
+
+
+def test_load_latest_thread_id_falls_back_to_latest_rollout_file(tmp_path: Path) -> None:
+    rollout_dir = tmp_path / "sessions" / "2026" / "03" / "27"
+    rollout_dir.mkdir(parents=True)
+    older_rollout = rollout_dir / "rollout-older.jsonl"
+    older_rollout.write_text(
+        '{"timestamp":"2026-03-27T10:00:00Z","type":"session_meta","payload":{"id":"thread-older"}}\n',
+        encoding="utf-8",
+    )
+    newer_rollout = rollout_dir / "rollout-newer.jsonl"
+    newer_rollout.write_text(
+        '{"timestamp":"2026-03-27T11:00:00Z","type":"session_meta","payload":{"id":"thread-newer"}}\n',
+        encoding="utf-8",
+    )
+
+    assert load_latest_thread_id(tmp_path) == "thread-newer"

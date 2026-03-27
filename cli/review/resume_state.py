@@ -8,6 +8,7 @@ from typing import Any
 
 SUMMARY_METADATA_RE = re.compile(r"<!--\s*codex-review-meta\s+({.*?})\s*-->")
 SESSION_INDEX_PATH = "session_index.jsonl"
+ROLLOUTS_SUBDIR = "sessions"
 REVIEW_RESUME_CACHE_VERSION = "v1"
 MAX_INLINE_INCREMENTAL_DIFF_LINES = 500
 
@@ -113,11 +114,21 @@ def build_review_resume_outputs(
 
 def load_latest_thread_id(codex_home: Path) -> str | None:
     session_index_path = codex_home / SESSION_INDEX_PATH
+    lines: list[str] | None = None
     try:
         lines = session_index_path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return None
+        lines = None
 
+    latest_thread_id = _load_latest_thread_id_from_index(lines)
+    if latest_thread_id is not None:
+        return latest_thread_id
+    return _load_latest_thread_id_from_rollouts(codex_home)
+
+
+def _load_latest_thread_id_from_index(lines: list[str] | None) -> str | None:
+    if lines is None:
+        return None
     latest_thread_id: str | None = None
     latest_updated_at = ""
     for line in lines:
@@ -140,6 +151,49 @@ def load_latest_thread_id(codex_home: Path) -> str | None:
             latest_thread_id = thread_id
             latest_updated_at = updated_at
     return latest_thread_id
+
+
+def _load_latest_thread_id_from_rollouts(codex_home: Path) -> str | None:
+    rollouts_root = codex_home / ROLLOUTS_SUBDIR
+    if not rollouts_root.is_dir():
+        return None
+
+    rollout_paths = sorted(
+        rollouts_root.rglob("*.jsonl"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for rollout_path in rollout_paths:
+        thread_id = _read_thread_id_from_rollout(rollout_path)
+        if thread_id is not None:
+            return thread_id
+    return None
+
+
+def _read_thread_id_from_rollout(rollout_path: Path) -> str | None:
+    try:
+        with rollout_path.open(encoding="utf-8") as handle:
+            first_line = handle.readline().strip()
+    except OSError:
+        return None
+    if not first_line:
+        return None
+    try:
+        payload = json.loads(first_line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("type") != "session_meta":
+        return None
+    session_payload = payload.get("payload")
+    if not isinstance(session_payload, dict):
+        return None
+    thread_id = session_payload.get("id")
+    if not isinstance(thread_id, str):
+        return None
+    normalized = thread_id.strip()
+    return normalized or None
 
 
 def _sanitize_cache_component(value: str) -> str:
