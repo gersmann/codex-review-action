@@ -54,7 +54,6 @@ def test_build_review_resume_outputs_uses_previous_sha_for_restore_key(tmp_path:
         "codex_home": str((tmp_path / "codex-review-state").resolve()),
         "previous_reviewed_sha": "oldsha",
         "restore_key": "codex-review-v1-owner-repo-pr-17-gpt-5.4-oldsha",
-        "restore_key_prefix": "codex-review-v1-owner-repo-pr-17-",
         "current_cache_key": "codex-review-v1-owner-repo-pr-17-gpt-5.4-newsha",
     }
 

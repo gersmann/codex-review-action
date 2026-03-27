@@ -204,9 +204,6 @@ class ReviewWorkflow:
         return None
 
     def _resume_cache_was_restored(self) -> bool:
-        restored_key = os.environ.get("CODEX_REVIEW_RESTORED_KEY")
-        if isinstance(restored_key, str) and restored_key.strip():
-            return True
         cache_hit = os.environ.get("CODEX_REVIEW_CACHE_HIT")
         if cache_hit is None:
             return True

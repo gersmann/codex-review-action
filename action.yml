@@ -91,14 +91,12 @@ runs:
         PYTHONPATH="${GITHUB_ACTION_PATH}:${PYTHONPATH:-}" \
           python3 -m cli.review.prepare_resume_state
     - name: Restore review Codex cache
-      if: ${{ inputs.mode == 'review' && steps.review_resume_state.outputs.restore_key_prefix != '' }}
+      if: ${{ inputs.mode == 'review' && steps.review_resume_state.outputs.restore_key != '' }}
       id: review_codex_cache
       uses: actions/cache/restore@v4
       with:
         path: ${{ steps.review_resume_state.outputs.codex_home }}
         key: ${{ steps.review_resume_state.outputs.restore_key }}
-        restore-keys: |
-          ${{ steps.review_resume_state.outputs.restore_key_prefix }}
     - name: Install Python dependencies
       shell: bash
       run: |
@@ -127,14 +125,13 @@ runs:
         CODEX_HOME: ${{ steps.review_resume_state.outputs.codex_home }}
         CODEX_REVIEW_PREVIOUS_HEAD_SHA: ${{ steps.review_resume_state.outputs.previous_reviewed_sha }}
         CODEX_REVIEW_CACHE_HIT: ${{ steps.review_codex_cache.outputs.cache-hit }}
-        CODEX_REVIEW_RESTORED_KEY: ${{ steps.review_codex_cache.outputs.cache-matched-key }}
       run: |
         set -euo pipefail
         # Execute the CLI directly; it detects GitHub Actions via env
         PYTHONPATH="${{ github.action_path }}:${PYTHONPATH:-}" \
           python3 -m cli.main
     - name: Save review Codex cache
-      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' && steps.review_codex_cache.outputs.cache-matched-key != steps.review_resume_state.outputs.current_cache_key }}
+      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' && !(steps.review_codex_cache.outputs.cache-hit == 'true' && steps.review_resume_state.outputs.restore_key == steps.review_resume_state.outputs.current_cache_key) }}
       uses: actions/cache/save@v4
       with:
         path: ${{ steps.review_resume_state.outputs.codex_home }}
