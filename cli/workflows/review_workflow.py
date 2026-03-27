@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..clients.codex_client import CodexClient
+from ..clients.git_ops import git_commit_shas, git_diff_text, git_is_ancestor
 from ..clients.github_client import GitHubClient, GitHubClientProtocol
 from ..core.config import ReviewConfig, make_debug
 from ..core.exceptions import CodexExecutionError, ReviewContractError
@@ -35,6 +38,12 @@ from ..review.posting import (
     build_inline_comment_payloads,
     persist_anchor_maps,
     post_inline_comments,
+)
+from ..review.resume_state import (
+    MAX_INLINE_INCREMENTAL_DIFF_LINES,
+    load_latest_thread_id,
+    parse_reviewed_head_sha,
+    render_review_summary_metadata,
 )
 from ..review.review_prompt import compose_prompt, load_guidelines
 
@@ -66,13 +75,24 @@ class ReviewWorkflowResult:
     summary: ReviewSummary
 
 
+@dataclass(frozen=True)
+class _ReviewResumeState:
+    previous_reviewed_sha: str
+    resume_thread_id: str
+    inline_diff: str | None
+    commit_shas: tuple[str, ...]
+
+
 def _build_review_summary(
     review: ReviewRunResult,
     summary: ReviewSummary,
     posting_outcome: ReviewPostingOutcome,
+    *,
+    reviewed_head_sha: str,
 ) -> str:
     summary_lines = [
         SUMMARY_MARKER,
+        render_review_summary_metadata(reviewed_head_sha),
         f"- Overall: {summary.overall_correctness.strip() or 'patch is correct'}",
         f"- New findings this run: {summary.current_findings_count}",
         f"- Prior unresolved Codex findings still relevant: {summary.carried_forward_count}",
@@ -135,6 +155,142 @@ class ReviewWorkflow:
             "Use git commands as needed to inspect the diff between the PR head and the base branch."
         )
         return "\n".join(parts).strip()
+
+    def _latest_reviewed_head_sha(
+        self,
+        issue_comments: list[IssueCommentLikeProtocol],
+    ) -> str | None:
+        for comment in reversed(issue_comments):
+            body = comment.body
+            if not isinstance(body, str) or SUMMARY_MARKER not in body:
+                continue
+            reviewed_head_sha = parse_reviewed_head_sha(body)
+            if reviewed_head_sha:
+                return reviewed_head_sha
+        return None
+
+    def _resume_cache_was_restored(self) -> bool:
+        cache_hit = os.environ.get("CODEX_REVIEW_CACHE_HIT")
+        if cache_hit is None:
+            return True
+        return cache_hit.strip().lower() == "true"
+
+    def _resolve_review_resume_state(
+        self,
+        issue_comments: list[IssueCommentLikeProtocol],
+        *,
+        head_sha: str,
+    ) -> _ReviewResumeState | None:
+        previous_reviewed_sha = os.environ.get("CODEX_REVIEW_PREVIOUS_HEAD_SHA")
+        if previous_reviewed_sha is not None:
+            previous_reviewed_sha = previous_reviewed_sha.strip() or None
+        if previous_reviewed_sha is None:
+            previous_reviewed_sha = self._latest_reviewed_head_sha(issue_comments)
+        if previous_reviewed_sha is None:
+            self._debug(1, "No prior reviewed HEAD SHA found; starting fresh review")
+            return None
+        if not self._resume_cache_was_restored():
+            self._debug(
+                1,
+                f"Resume cache miss for prior reviewed SHA {previous_reviewed_sha}; starting fresh",
+            )
+            return None
+
+        codex_home_value = os.environ.get("CODEX_HOME")
+        if not isinstance(codex_home_value, str) or not codex_home_value.strip():
+            self._debug(1, "CODEX_HOME is unset; starting fresh review")
+            return None
+
+        try:
+            is_ancestor = git_is_ancestor(previous_reviewed_sha, head_sha)
+        except subprocess.CalledProcessError as exc:
+            self._debug(
+                1,
+                "Failed to validate review resume ancestry "
+                f"{previous_reviewed_sha} -> {head_sha}: {exc}",
+            )
+            return None
+        if not is_ancestor:
+            self._debug(
+                1,
+                f"Prior reviewed SHA {previous_reviewed_sha} is not an ancestor of {head_sha}; starting fresh",
+            )
+            return None
+
+        codex_home = Path(codex_home_value)
+        resume_thread_id = load_latest_thread_id(codex_home)
+        if resume_thread_id is None:
+            self._debug(
+                1,
+                f"No cached Codex thread found in {codex_home}; starting fresh review",
+            )
+            return None
+
+        revision_range = f"{previous_reviewed_sha}..{head_sha}"
+        try:
+            incremental_diff = git_diff_text(revision_range)
+            commit_shas = tuple(git_commit_shas(revision_range))
+        except subprocess.CalledProcessError as exc:
+            self._debug(
+                1,
+                f"Failed to compute incremental review context for {revision_range}: {exc}",
+            )
+            return None
+
+        diff_line_count = len(incremental_diff.splitlines())
+        inline_diff = None
+        if diff_line_count <= MAX_INLINE_INCREMENTAL_DIFF_LINES:
+            inline_diff = incremental_diff.strip() or None
+        self._debug(
+            1,
+            "Resuming review from "
+            f"{previous_reviewed_sha} with thread {resume_thread_id}; "
+            f"incremental diff lines={diff_line_count}, "
+            f"{'embedding diff' if inline_diff is not None else 'using commit range only'}",
+        )
+        return _ReviewResumeState(
+            previous_reviewed_sha=previous_reviewed_sha,
+            resume_thread_id=resume_thread_id,
+            inline_diff=inline_diff,
+            commit_shas=commit_shas,
+        )
+
+    def _build_review_resume_block(
+        self,
+        resume_state: _ReviewResumeState | None,
+        *,
+        head_sha: str,
+    ) -> str:
+        if resume_state is None:
+            return ""
+
+        lines = [
+            "<review_resume_context>",
+            "This is a continuation of an existing review conversation.",
+            "Only review changes introduced since the previously reviewed commit.",
+            f"<previous_reviewed_head_sha>{resume_state.previous_reviewed_sha}</previous_reviewed_head_sha>",
+            f"<current_head_sha>{head_sha}</current_head_sha>",
+        ]
+        if resume_state.inline_diff is not None:
+            lines.extend(
+                [
+                    "<incremental_diff>",
+                    resume_state.inline_diff,
+                    "</incremental_diff>",
+                ]
+            )
+        else:
+            lines.extend(["<incremental_commits>"])
+            lines.extend(resume_state.commit_shas)
+            lines.extend(
+                [
+                    "</incremental_commits>",
+                    "Inspect the incremental delta locally with "
+                    f"`git diff {resume_state.previous_reviewed_sha}..{head_sha}` as needed.",
+                ]
+            )
+        lines.append("</review_resume_context>")
+        return "\n".join(lines)
 
     def _build_schema_prompt(self, existing_comments: list[ExistingReviewComment]) -> str:
         """Build the turn-2 prompt for structured output, with optional dedup context."""
@@ -350,7 +506,19 @@ class ReviewWorkflow:
         guidelines = load_guidelines(self.config)
         raw_prompt = compose_prompt(self.config, changed_files, pr, artifacts)
         base_instructions = self._build_review_base_instructions(guidelines)
-        prompt = base_instructions + "\n\n" + raw_prompt
+        resume_state = self._resolve_review_resume_state(
+            snapshots.issue_comments,
+            head_sha=head_sha,
+        )
+        resume_block = self._build_review_resume_block(
+            resume_state,
+            head_sha=head_sha,
+        )
+        prompt_sections = [base_instructions]
+        if resume_block:
+            prompt_sections.append(resume_block)
+        prompt_sections.append(raw_prompt)
+        prompt = "\n\n".join(section for section in prompt_sections if section)
 
         self._debug(2, f"Prompt length: {len(prompt)} chars")
 
@@ -363,6 +531,7 @@ class ReviewWorkflow:
             sandbox_mode="danger-full-access",
             output_schema=REVIEW_OUTPUT_SCHEMA,
             schema_prompt=schema_prompt,
+            resume_thread_id=resume_state.resume_thread_id if resume_state is not None else None,
         )
 
         parsed_result = self._sanitize_review_result(
@@ -379,7 +548,12 @@ class ReviewWorkflow:
         )
         summary = self._build_summary(parsed_result)
 
-        summary_text = _build_review_summary(parsed_result, summary, posting_outcome)
+        summary_text = _build_review_summary(
+            parsed_result,
+            summary,
+            posting_outcome,
+            reviewed_head_sha=head_sha,
+        )
         self._publish_summary(pr, summary_text)
 
         return ReviewWorkflowResult(

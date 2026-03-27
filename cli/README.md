@@ -139,6 +139,14 @@ pytest tests/ -v
   - **Inline semantic dedup**: the structured-output turn uses those prior Codex comments to decide which issues are new vs already covered.
   - **Re-adjudicated summary carry-forward**: the model returns prior comment IDs that still seem relevant, and the summary reports those separately from new findings.
 
+## Review Resume Between Pushes
+
+- Review mode can resume the previous Codex thread when a PR receives new commits.
+- The summary issue comment stores the last reviewed head SHA in hidden metadata.
+- GitHub Actions review runs restore an isolated review-only `CODEX_HOME` cache keyed by repository, PR number, model, and reviewed SHA.
+- When the prior reviewed SHA is still an ancestor of the current head and the cached session index contains a thread, the workflow resumes that thread and narrows the prompt to `previous_reviewed_sha..HEAD`.
+- Small incremental diffs are embedded directly in the prompt; larger deltas are referenced by commit range and inspected with git during the review turn.
+
 ### Customizing the Review Prompt
 
 - Provide extra reviewer guidance using env `CODEX_ADDITIONAL_PROMPT` (verbatim text). When set, it is appended after the built-in guidelines and before the line-selection rules.

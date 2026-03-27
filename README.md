@@ -117,6 +117,15 @@ jobs:
 - **PR-level summary** as an issue comment on each run (refreshed on re-runs; prior summaries are deleted).
 - **Multi-line suggestions** only when contiguous and short; otherwise a single-line comment.
 
+## Review Continuation
+
+On repeated `pull_request` review runs, the action now tries to continue the prior Codex review instead of restarting from scratch.
+
+1. The PR summary stores the previously reviewed head SHA in hidden metadata.
+2. Review mode caches an isolated Codex home keyed by repository, PR number, model, and reviewed SHA.
+3. On the next push, the action restores that cache, resumes the latest stored review thread, and scopes the prompt to the delta since the previously reviewed SHA.
+4. If the prior SHA is no longer an ancestor, the cache is missing, or no thread can be restored, the action falls back to a fresh full review.
+
 ## Deduplication on Repeated Runs
 
 When a prior Codex review exists on the PR, reruns only reuse **unresolved Codex-authored review threads** as context.

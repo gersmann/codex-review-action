@@ -252,6 +252,7 @@ def test_review_summary_mentions_address_comments_tip() -> None:
             active_findings_count=0,
         ),
         ReviewPostingOutcome.empty(0),
+        reviewed_head_sha="deadbeef",
     )
 
     assert SUMMARY_TIP in summary

@@ -191,6 +191,36 @@ def git_is_ancestor(older_sha: str, newer_sha: str) -> bool:
     )
 
 
+def git_diff_text(revision_range: str, *, unified: int = 3) -> str:
+    """Return the git diff for ``revision_range``.
+
+    Raises:
+        subprocess.CalledProcessError: Git diff failed.
+    """
+    result = _run_git(
+        ["diff", f"--unified={unified}", "--no-color", revision_range],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        _raise_git_result_error(result)
+    return result.stdout
+
+
+def git_commit_shas(revision_range: str) -> list[str]:
+    """Return commit SHAs in ``revision_range`` from oldest to newest.
+
+    Raises:
+        subprocess.CalledProcessError: Git log probe failed.
+    """
+    result = _run_git(
+        ["rev-list", "--reverse", revision_range],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        _raise_git_result_error(result)
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def git_rebase_in_progress() -> bool:
     """Return whether repository is in an active rebase state.
 

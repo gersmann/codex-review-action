@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
-from codex import Codex, CodexOptions, ThreadStartOptions, TurnOptions
+from codex import Codex, CodexOptions, ThreadResumeOptions, ThreadStartOptions, TurnOptions
 from codex.errors import CodexParseError, ThreadRunError
 from codex.protocol import types as protocol
 from codex.thread import CodexTurnStream, Thread
@@ -92,6 +93,7 @@ class CodexClient:
         reasoning_effort: str | None = None,
         suppress_stream: bool = False,
         sandbox_mode: str = "read-only",
+        resume_thread_id: str | None = None,
     ) -> str:
         """Run a single text turn and return the final agent text."""
         return self._run_session(
@@ -99,6 +101,7 @@ class CodexClient:
             reasoning_effort=reasoning_effort,
             suppress_stream=suppress_stream,
             sandbox_mode=sandbox_mode,
+            resume_thread_id=resume_thread_id,
             session_runner=lambda thread, effort, stream_enabled: self._run_text_session(
                 thread=thread,
                 prompt=prompt,
@@ -117,6 +120,7 @@ class CodexClient:
         reasoning_effort: str | None = None,
         suppress_stream: bool = False,
         sandbox_mode: str = "read-only",
+        resume_thread_id: str | None = None,
     ) -> str:
         """Run an agentic turn followed by a schema-enforced output turn."""
         return self._run_session(
@@ -124,6 +128,7 @@ class CodexClient:
             reasoning_effort=reasoning_effort,
             suppress_stream=suppress_stream,
             sandbox_mode=sandbox_mode,
+            resume_thread_id=resume_thread_id,
             session_runner=lambda thread, effort, stream_enabled: self._run_structured_session(
                 thread=thread,
                 prompt=prompt,
@@ -141,15 +146,17 @@ class CodexClient:
         reasoning_effort: str | None,
         suppress_stream: bool,
         sandbox_mode: str,
+        resume_thread_id: str | None,
         session_runner: Callable[[Thread, str, bool], str],
     ) -> str:
         effort = self._resolve_effort(reasoning_effort)
         stream_enabled = self._should_stream(suppress_stream)
 
         try:
-            thread = self._create_thread(
+            thread = self._start_or_resume_thread(
                 model_name=model_name,
                 sandbox_mode=sandbox_mode,
+                resume_thread_id=resume_thread_id,
             )
             return session_runner(thread, effort, stream_enabled)
         except ThreadRunError as run_err:
@@ -419,18 +426,64 @@ class CodexClient:
         self._debug(1, f"Invalid web search mode '{mode}', falling back to 'live'")
         return "live"
 
-    def _create_thread(self, *, model_name: str | None, sandbox_mode: str) -> Thread:
-        resolved_sandbox_mode = self._normalize_sandbox_mode(sandbox_mode, "read-only")
+    def _codex_process_env(self) -> dict[str, str] | None:
+        codex_home = os.environ.get("CODEX_HOME")
+        if not isinstance(codex_home, str):
+            return None
+        normalized = codex_home.strip()
+        if not normalized:
+            return None
+        return {"CODEX_HOME": normalized}
+
+    def _resolved_model_name(self, model_name: str | None) -> str:
+        resolved_model_name = model_name if model_name is not None else self.config.model_name
+        return resolved_model_name.strip()
+
+    def _make_codex_client(self) -> Codex:
         return Codex(
             options=CodexOptions(
                 config=cast(Any, {"show_raw_agent_reasoning": self.config.debug_level >= 2}),
                 api_key=self._resolve_api_key(),
+                env=self._codex_process_env(),
             )
-        ).start_thread(
+        )
+
+    def _thread_config(self) -> dict[str, Literal["disabled", "cached", "live"]]:
+        return {"web_search": self._codex_web_search_mode()}
+
+    def _start_or_resume_thread(
+        self,
+        *,
+        model_name: str | None,
+        sandbox_mode: str,
+        resume_thread_id: str | None,
+    ) -> Thread:
+        resolved_sandbox_mode = self._normalize_sandbox_mode(sandbox_mode, "read-only")
+        resolved_model_name = self._resolved_model_name(model_name)
+        codex_client = self._make_codex_client()
+        if resume_thread_id:
+            try:
+                self._debug(1, f"Attempting to resume Codex thread {resume_thread_id}")
+                return codex_client.resume_thread(
+                    resume_thread_id,
+                    ThreadResumeOptions(
+                        model=resolved_model_name,
+                        sandbox=cast(Any, resolved_sandbox_mode),
+                        config=cast(Any, self._thread_config()),
+                        persist_extended_history=True,
+                    ),
+                )
+            except Exception as exc:
+                self._debug(
+                    1,
+                    f"Failed to resume Codex thread {resume_thread_id}: {exc}; starting fresh",
+                )
+        return codex_client.start_thread(
             ThreadStartOptions(
-                model=(model_name or self.config.model_name).strip(),
+                model=resolved_model_name,
                 sandbox=cast(Any, resolved_sandbox_mode),
-                config=cast(Any, {"web_search": self._codex_web_search_mode()}),
+                config=cast(Any, self._thread_config()),
+                persist_extended_history=True,
             )
         )
 

@@ -9,6 +9,8 @@ import pytest
 from cli.clients.git_ops import (
     GitWorktreeSnapshot,
     git_changed_paths_since_snapshot,
+    git_commit_shas,
+    git_diff_text,
     git_format_called_process_error,
 )
 
@@ -171,6 +173,40 @@ def test_git_head_is_ahead_raises_when_remote_probe_errors(
 
     with pytest.raises(subprocess.CalledProcessError):
         git_ops.git_head_is_ahead("feature")
+
+
+def test_git_diff_text_and_commit_shas_use_expected_git_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cli.clients import git_ops
+
+    calls: list[Sequence[str]] = []
+
+    def _fake_run_git(
+        args: Sequence[str],
+        *,
+        capture_output: bool = False,
+        text: bool = True,
+        check: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        assert capture_output is True
+        assert text is True
+        assert check is False
+        if args[:3] == ["diff", "--unified=3", "--no-color"]:
+            return subprocess.CompletedProcess(args, 0, stdout="diff text\n", stderr="")
+        if args[:2] == ["rev-list", "--reverse"]:
+            return subprocess.CompletedProcess(args, 0, stdout="a\nb\n", stderr="")
+        raise AssertionError(f"unexpected args: {args}")
+
+    monkeypatch.setattr(git_ops, "_run_git", _fake_run_git)
+
+    assert git_diff_text("prev..HEAD") == "diff text\n"
+    assert git_commit_shas("prev..HEAD") == ["a", "b"]
+    assert calls == [
+        ["diff", "--unified=3", "--no-color", "prev..HEAD"],
+        ["rev-list", "--reverse", "prev..HEAD"],
+    ]
 
 
 def test_git_commit_paths_commits_when_staged_changes_exist(

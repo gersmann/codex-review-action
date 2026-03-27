@@ -12,6 +12,7 @@ from cli.core.exceptions import CodexExecutionError, ReviewContractError
 from cli.core.models import InlineCommentPayload, ReviewThreadComment, ReviewThreadSnapshot
 from cli.review.artifacts import ReviewArtifacts
 from cli.review.posting import ReviewPostingOutcome
+from cli.review.resume_state import render_review_summary_metadata
 from cli.workflows.review_workflow import SUMMARY_MARKER, ReviewSummary, ReviewWorkflow
 
 
@@ -205,6 +206,7 @@ class _FakeCodexClient:
         output_schema: dict[str, object],
         schema_prompt: str,
         sandbox_mode: str,
+        resume_thread_id: str | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -212,6 +214,7 @@ class _FakeCodexClient:
                 "output_schema": output_schema,
                 "schema_prompt": schema_prompt,
                 "sandbox_mode": sandbox_mode,
+                "resume_thread_id": resume_thread_id,
             }
         )
         return self.response
@@ -315,6 +318,7 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
     assert prior_summary.deleted is True
     assert len(pr.as_issue().created_comments) == 1
     assert SUMMARY_MARKER in pr.as_issue().created_comments[0]
+    assert render_review_summary_metadata("head-sha") in pr.as_issue().created_comments[0]
     assert "Needs one fix." in pr.as_issue().created_comments[0]
     assert post_calls[0]["head_sha"] == "head-sha"
     assert result.review.overall_correctness == "patch is incorrect"
@@ -461,6 +465,7 @@ def test_process_review_summary_counts_carried_forward_codex_comments(tmp_path: 
         "- Prior unresolved Codex findings still relevant: 1" in pr.as_issue().created_comments[0]
     )
     assert "- Active findings total: 1" in pr.as_issue().created_comments[0]
+    assert render_review_summary_metadata("head-sha") in pr.as_issue().created_comments[0]
 
 
 def test_process_review_warns_when_prior_summary_delete_fails(
@@ -509,6 +514,126 @@ def test_process_review_warns_when_prior_summary_delete_fails(
     err = capsys.readouterr().err
     assert "Failed to delete prior summary issue comment id=99: permission denied" in err
     assert len(pr.as_issue().created_comments) == 1
+
+
+def test_process_review_resumes_prior_thread_with_inline_incremental_diff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src.py").write_text("value = 2\n", encoding="utf-8")
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "session_index.jsonl").write_text(
+        '{"id":"thread-1","thread_name":"Review","updated_at":"2026-03-27T10:00:00Z"}\n',
+        encoding="utf-8",
+    )
+    prior_summary = _FakeIssueComment(
+        (f"{SUMMARY_MARKER}\n{render_review_summary_metadata('prev-sha')}\nold summary"),
+        comment_id=10,
+        login="reviewer",
+    )
+    pr = _FakePR(issue_comments=[prior_summary])
+    github_client = _FakeGitHubClient(pr)
+    codex_client = _FakeCodexClient(
+        json.dumps(
+            {
+                "overall_correctness": "patch is correct",
+                "overall_explanation": "",
+                "overall_confidence_score": None,
+                "carried_forward": [],
+                "findings": [],
+            }
+        )
+    )
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, github_client),
+        codex_client=cast(Any, codex_client),
+    )
+
+    monkeypatch.setattr(
+        workflow.context_manager,
+        "write_context_artifacts",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_post_results",
+        lambda *args, **kwargs: ReviewPostingOutcome.empty(0),
+    )
+    monkeypatch.setattr("cli.workflows.review_workflow.git_is_ancestor", lambda older, newer: True)
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.git_diff_text",
+        lambda revision_range: "@@ -1 +1 @@\n-value = 1\n+value = 2\n",
+    )
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.git_commit_shas",
+        lambda revision_range: ["commit-1"],
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_REVIEW_PREVIOUS_HEAD_SHA", "prev-sha")
+    monkeypatch.setenv("CODEX_REVIEW_CACHE_HIT", "true")
+
+    workflow.process_review(7)
+
+    assert codex_client.calls[0]["resume_thread_id"] == "thread-1"
+    assert "<review_resume_context>" in codex_client.calls[0]["prompt"]
+    assert (
+        "<previous_reviewed_head_sha>prev-sha</previous_reviewed_head_sha>"
+        in codex_client.calls[0]["prompt"]
+    )
+    assert "<current_head_sha>head-sha</current_head_sha>" in codex_client.calls[0]["prompt"]
+    assert "<incremental_diff>" in codex_client.calls[0]["prompt"]
+    assert "+value = 2" in codex_client.calls[0]["prompt"]
+
+
+def test_process_review_falls_back_to_fresh_review_when_prior_sha_is_not_ancestor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    prior_summary = _FakeIssueComment(
+        (f"{SUMMARY_MARKER}\n{render_review_summary_metadata('prev-sha')}\nold summary"),
+        comment_id=10,
+        login="reviewer",
+    )
+    pr = _FakePR(issue_comments=[prior_summary])
+    github_client = _FakeGitHubClient(pr)
+    codex_client = _FakeCodexClient(
+        json.dumps(
+            {
+                "overall_correctness": "patch is correct",
+                "overall_explanation": "",
+                "overall_confidence_score": None,
+                "carried_forward": [],
+                "findings": [],
+            }
+        )
+    )
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, github_client),
+        codex_client=cast(Any, codex_client),
+    )
+
+    monkeypatch.setattr(
+        workflow.context_manager,
+        "write_context_artifacts",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_post_results",
+        lambda *args, **kwargs: ReviewPostingOutcome.empty(0),
+    )
+    monkeypatch.setattr("cli.workflows.review_workflow.git_is_ancestor", lambda older, newer: False)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("CODEX_REVIEW_PREVIOUS_HEAD_SHA", "prev-sha")
+    monkeypatch.setenv("CODEX_REVIEW_CACHE_HIT", "true")
+
+    workflow.process_review(7)
+
+    assert codex_client.calls[0]["resume_thread_id"] is None
+    assert "<review_resume_context>" not in codex_client.calls[0]["prompt"]
 
 
 def test_process_review_raises_for_invalid_json(
