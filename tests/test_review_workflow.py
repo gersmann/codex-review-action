@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -8,7 +9,7 @@ from typing import Any, cast
 import pytest
 
 from cli.core.config import ReviewConfig
-from cli.core.exceptions import CodexExecutionError, ReviewContractError
+from cli.core.exceptions import CodexExecutionError, ReviewContractError, ReviewResumeError
 from cli.core.models import InlineCommentPayload, ReviewThreadComment, ReviewThreadSnapshot
 from cli.review.artifacts import ReviewArtifacts
 from cli.review.posting import ReviewPostingOutcome
@@ -900,6 +901,116 @@ def test_process_review_falls_back_to_fresh_review_when_prior_sha_is_not_ancesto
 
     assert codex_client.calls[0]["resume_thread_id"] is None
     assert "<review_resume_context>" not in codex_client.calls[0]["prompt"]
+
+
+def test_process_review_raises_when_code_home_is_missing_after_cache_restore(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    prior_summary = _FakeIssueComment(
+        f"{SUMMARY_MARKER}\n{render_review_summary_metadata('prev-sha')}\nold summary",
+    )
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, _FakeGitHubClient(_FakePR(issue_comments=[prior_summary]))),
+        codex_client=cast(Any, _FakeCodexClient("{}")),
+    )
+
+    monkeypatch.setenv("CODEX_REVIEW_PREVIOUS_HEAD_SHA", "prev-sha")
+    monkeypatch.setenv("CODEX_REVIEW_CACHE_HIT", "true")
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+
+    with pytest.raises(ReviewResumeError, match="CODEX_HOME is unset"):
+        workflow.process_review(7)
+
+
+def test_process_review_raises_when_cached_thread_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    prior_summary = _FakeIssueComment(
+        f"{SUMMARY_MARKER}\n{render_review_summary_metadata('prev-sha')}\nold summary",
+    )
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, _FakeGitHubClient(_FakePR(issue_comments=[prior_summary]))),
+        codex_client=cast(Any, _FakeCodexClient("{}")),
+    )
+
+    monkeypatch.setattr("cli.workflows.review_workflow.git_is_ancestor", lambda older, newer: True)
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.load_latest_thread_id",
+        lambda codex_home, cwd: (_ for _ in ()).throw(ReviewResumeError("thread lookup failed")),
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_REVIEW_PREVIOUS_HEAD_SHA", "prev-sha")
+    monkeypatch.setenv("CODEX_REVIEW_CACHE_HIT", "true")
+
+    with pytest.raises(ReviewResumeError, match="thread lookup failed"):
+        workflow.process_review(7)
+
+
+def test_process_review_raises_when_resume_ancestry_check_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    prior_summary = _FakeIssueComment(
+        f"{SUMMARY_MARKER}\n{render_review_summary_metadata('prev-sha')}\nold summary",
+    )
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, _FakeGitHubClient(_FakePR(issue_comments=[prior_summary]))),
+        codex_client=cast(Any, _FakeCodexClient("{}")),
+    )
+
+    def _raise_git(*args: object, **kwargs: object) -> bool:
+        raise subprocess.CalledProcessError(1, "git merge-base")
+
+    monkeypatch.setattr("cli.workflows.review_workflow.git_is_ancestor", _raise_git)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_REVIEW_PREVIOUS_HEAD_SHA", "prev-sha")
+    monkeypatch.setenv("CODEX_REVIEW_CACHE_HIT", "true")
+
+    with pytest.raises(ReviewResumeError, match="Failed to validate review resume ancestry"):
+        workflow.process_review(7)
+
+
+def test_process_review_raises_when_incremental_git_context_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    prior_summary = _FakeIssueComment(
+        f"{SUMMARY_MARKER}\n{render_review_summary_metadata('prev-sha')}\nold summary",
+    )
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, _FakeGitHubClient(_FakePR(issue_comments=[prior_summary]))),
+        codex_client=cast(Any, _FakeCodexClient("{}")),
+    )
+
+    monkeypatch.setattr("cli.workflows.review_workflow.git_is_ancestor", lambda older, newer: True)
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.load_latest_thread_id",
+        lambda codex_home, cwd: "thread-1",
+    )
+
+    def _raise_diff(revision_range: str) -> str:
+        _ = revision_range
+        raise subprocess.CalledProcessError(1, "git diff")
+
+    monkeypatch.setattr("cli.workflows.review_workflow.git_diff_text", _raise_diff)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_REVIEW_PREVIOUS_HEAD_SHA", "prev-sha")
+    monkeypatch.setenv("CODEX_REVIEW_CACHE_HIT", "true")
+
+    with pytest.raises(ReviewResumeError, match="Failed to compute incremental review context"):
+        workflow.process_review(7)
 
 
 def test_process_review_raises_for_invalid_json(

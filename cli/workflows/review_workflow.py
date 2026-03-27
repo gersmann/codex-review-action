@@ -11,7 +11,7 @@ from ..clients.codex_client import CodexClient
 from ..clients.git_ops import git_commit_shas, git_diff_text, git_is_ancestor
 from ..clients.github_client import GitHubClient, GitHubClientProtocol
 from ..core.config import ReviewConfig, make_debug
-from ..core.exceptions import CodexExecutionError, ReviewContractError
+from ..core.exceptions import CodexExecutionError, ReviewContractError, ReviewResumeError
 from ..core.github_types import (
     ChangedFileProtocol,
     IssueCommentLikeProtocol,
@@ -232,18 +232,17 @@ class ReviewWorkflow:
 
         codex_home_value = os.environ.get("CODEX_HOME")
         if not isinstance(codex_home_value, str) or not codex_home_value.strip():
-            self._debug(1, "CODEX_HOME is unset; starting fresh review")
-            return None
+            raise ReviewResumeError(
+                "Resume cache restored but CODEX_HOME is unset; cannot resume review thread"
+            )
 
         try:
             is_ancestor = git_is_ancestor(previous_reviewed_sha, head_sha)
         except subprocess.CalledProcessError as exc:
-            self._debug(
-                1,
+            raise ReviewResumeError(
                 "Failed to validate review resume ancestry "
-                f"{previous_reviewed_sha} -> {head_sha}: {exc}",
-            )
-            return None
+                f"{previous_reviewed_sha} -> {head_sha}: {exc}"
+            ) from exc
         if not is_ancestor:
             self._debug(
                 1,
@@ -253,23 +252,15 @@ class ReviewWorkflow:
 
         codex_home = Path(codex_home_value)
         resume_thread_id = load_latest_thread_id(codex_home, Path.cwd())
-        if resume_thread_id is None:
-            self._debug(
-                1,
-                f"No cached Codex thread found in {codex_home}; starting fresh review",
-            )
-            return None
 
         revision_range = f"{previous_reviewed_sha}..{head_sha}"
         try:
             incremental_diff = git_diff_text(revision_range)
             commit_shas = tuple(git_commit_shas(revision_range))
         except subprocess.CalledProcessError as exc:
-            self._debug(
-                1,
-                f"Failed to compute incremental review context for {revision_range}: {exc}",
-            )
-            return None
+            raise ReviewResumeError(
+                f"Failed to compute incremental review context for {revision_range}: {exc}"
+            ) from exc
 
         diff_line_count = len(incremental_diff.splitlines())
         inline_diff = None

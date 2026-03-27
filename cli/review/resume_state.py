@@ -10,6 +10,8 @@ from codex.app_server import AppServerClient, AppServerProcessOptions, AppServer
 from codex.app_server.models import ThreadListResult
 from codex.protocol import types as protocol
 
+from ..core.exceptions import ReviewResumeError
+
 SUMMARY_METADATA_RE = re.compile(r"<!--\s*codex-review-meta\s+({.*?})\s*-->")
 REVIEW_RESUME_CACHE_VERSION = "v1"
 MAX_INLINE_INCREMENTAL_DIFF_LINES = 500
@@ -114,10 +116,13 @@ def build_review_resume_outputs(
     }
 
 
-def load_latest_thread_id(codex_home: Path, cwd: Path) -> str | None:
+def load_latest_thread_id(codex_home: Path, cwd: Path) -> str:
     threads = _list_stored_threads(codex_home=codex_home, cwd=cwd)
     if not threads:
-        return None
+        raise ReviewResumeError(
+            "Resume cache restored but no Codex thread was found for "
+            f"{cwd.resolve()} in {codex_home}"
+        )
     latest_thread = max(threads, key=lambda thread: thread.updatedAt)
     return latest_thread.id
 
@@ -136,8 +141,10 @@ def _list_stored_threads(*, codex_home: Path, cwd: Path) -> list[protocol.Thread
                 cursor = _next_cursor(page)
                 if cursor is None:
                     return all_threads
-    except Exception:
-        return []
+    except Exception as exc:
+        raise ReviewResumeError(
+            f"Failed to list cached Codex threads from {codex_home}: {exc}"
+        ) from exc
 
 
 def _next_cursor(page: ThreadListResult) -> str | None:

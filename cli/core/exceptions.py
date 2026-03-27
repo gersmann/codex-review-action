@@ -31,3 +31,7 @@ class PromptError(CodexReviewError):
 
 class ReviewContractError(CodexReviewError):
     """Structured review payload or metadata contract violations."""
+
+
+class ReviewResumeError(CodexReviewError):
+    """Review resume invariant or infrastructure failures."""
