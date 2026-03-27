@@ -30,6 +30,7 @@ def test_load_guidelines_include_repo_standard_comment_format() -> None:
     assert '"carried_forward": [' in guidelines
     assert '"comment_id": "<prior review comment id>"' in guidelines
     assert '"current_evidence": "<exact current-code snippet copied verbatim>"' in guidelines
+    assert '"resolved_comment_ids": [' in guidelines
     assert '"overall_correctness": "patch is correct" | "patch is incorrect"' in guidelines
     assert '"code_location": {' in guidelines
 

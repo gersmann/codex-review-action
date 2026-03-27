@@ -43,6 +43,11 @@ class GitHubClientProtocol(Protocol):
         comment_id: int,
         text: str,
     ) -> None: ...
+    def resolve_review_thread(
+        self,
+        pr: PullRequestLikeProtocol,
+        thread_id: str,
+    ) -> None: ...
     def post_issue_comment(self, pr: PullRequestLikeProtocol, text: str) -> None: ...
 
 
@@ -158,6 +163,22 @@ class GitHubClient:
                 exc,
             ) from exc
 
+    def resolve_review_thread(
+        self,
+        pr: PullRequestLikeProtocol,
+        thread_id: str,
+    ) -> None:
+        try:
+            pr._requester.graphql_query(
+                _RESOLVE_REVIEW_THREAD_MUTATION,
+                {"threadId": thread_id},
+            )
+        except Exception as exc:
+            raise _wrap_github_error(
+                f"failed resolving review thread {thread_id} on PR #{pr.number}",
+                exc,
+            ) from exc
+
     def post_issue_comment(
         self,
         pr: PullRequestLikeProtocol,
@@ -207,6 +228,17 @@ query ReviewThreads($owner: String!, $name: String!, $number: Int!, $after: Stri
           endCursor
         }
       }
+    }
+  }
+}
+"""
+
+_RESOLVE_REVIEW_THREAD_MUTATION = """
+mutation ResolveReviewThread($threadId: ID!) {
+  resolveReviewThread(input: { threadId: $threadId }) {
+    thread {
+      id
+      isResolved
     }
   }
 }

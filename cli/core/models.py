@@ -165,14 +165,16 @@ class ReviewFinding:
 
 
 @dataclass(frozen=True)
-class ExistingReviewComment:
-    """Structured inline review comment used for local dedupe."""
+class PriorCodexReviewComment:
+    """Unresolved Codex-authored review thread comment reused on reruns."""
 
     id: str
+    thread_id: str
     path: str
     line: int
     body: str
     current_code: str
+    is_currently_applicable: bool
 
 
 @dataclass(frozen=True)
@@ -315,12 +317,14 @@ class ReviewRunResult:
     overall_confidence_score: float | None
     findings: list[ReviewFinding]
     carried_forward: list[CarriedForwardReviewComment] = field(default_factory=list)
+    resolved_comment_ids: list[str] = field(default_factory=list)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> ReviewRunResult:
         required_fields = {
             "findings",
             "carried_forward",
+            "resolved_comment_ids",
             "overall_correctness",
             "overall_explanation",
             "overall_confidence_score",
@@ -387,12 +391,24 @@ class ReviewRunResult:
                     current_evidence=current_evidence,
                 )
             )
+        resolved_comment_ids_raw = payload.get("resolved_comment_ids")
+        if not isinstance(resolved_comment_ids_raw, list):
+            raise ReviewContractError("Review output field 'resolved_comment_ids' must be an array")
+        resolved_comment_ids: list[str] = []
+        for index, item in enumerate(resolved_comment_ids_raw):
+            if not isinstance(item, str):
+                raise ReviewContractError(
+                    "Review output field 'resolved_comment_ids' "
+                    f"item at index {index} must be a string"
+                )
+            resolved_comment_ids.append(item)
         return cls(
             overall_correctness=overall_correctness,
             overall_explanation=overall_explanation,
             overall_confidence_score=overall_confidence_score,
             findings=findings,
             carried_forward=carried_forward,
+            resolved_comment_ids=resolved_comment_ids,
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -408,6 +424,7 @@ class ReviewRunResult:
                 }
                 for item in self.carried_forward
             ],
+            "resolved_comment_ids": list(self.resolved_comment_ids),
         }
 
     @property
@@ -467,6 +484,10 @@ REVIEW_OUTPUT_SCHEMA: dict[str, object] = {
                 "additionalProperties": False,
             },
         },
+        "resolved_comment_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
         "overall_correctness": {"type": "string"},
         "overall_explanation": {"type": "string"},
         "overall_confidence_score": {"type": ["number", "null"]},
@@ -474,6 +495,7 @@ REVIEW_OUTPUT_SCHEMA: dict[str, object] = {
     "required": [
         "findings",
         "carried_forward",
+        "resolved_comment_ids",
         "overall_correctness",
         "overall_explanation",
         "overall_confidence_score",

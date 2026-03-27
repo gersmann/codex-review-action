@@ -298,12 +298,23 @@ def _run_mode_workflow(config: ReviewConfig) -> int:
     result = workflow.process_review(config.pr_number)
 
     summary = result.summary
-    if summary.carried_forward_count > 0:
+    if (
+        summary.carried_forward_count > 0
+        or summary.resolved_count > 0
+        or summary.resolution_failure_count > 0
+    ):
+        extra_parts: list[str] = []
+        if summary.carried_forward_count > 0:
+            extra_parts.append(f"{summary.carried_forward_count} prior findings still relevant")
+        if summary.resolved_count > 0:
+            extra_parts.append(f"{summary.resolved_count} prior findings auto-resolved")
+        if summary.resolution_failure_count > 0:
+            extra_parts.append(f"{summary.resolution_failure_count} resolution failures")
         print(
             "\nReview completed: "
             f"{summary.overall_correctness}, "
             f"{summary.current_findings_count} new findings, "
-            f"{summary.carried_forward_count} prior findings still relevant "
+            f"{', '.join(extra_parts)} "
             f"({summary.active_findings_count} active total)"
         )
     else:

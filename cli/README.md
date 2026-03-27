@@ -138,6 +138,7 @@ pytest tests/ -v
   - **Codex-thread attribution**: only unresolved review threads whose root author matches a prior Codex summary author are reused as rerun context.
   - **Inline semantic dedup**: the structured-output turn uses those prior Codex comments to decide which issues are new vs already covered.
   - **Re-adjudicated summary carry-forward**: the model returns prior comment IDs that still seem relevant, and the summary reports those separately from new findings.
+  - **Auto-resolution of fixed Codex threads**: the model can also mark prior unresolved Codex comments as fixed, and review mode resolves those GitHub review threads automatically.
 
 ## Review Resume Between Pushes
 

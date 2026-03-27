@@ -132,7 +132,8 @@ When a prior Codex review exists on the PR, reruns only reuse **unresolved Codex
 
 1. **Inline semantic dedup** — prior unresolved Codex comments are passed to the model's structured-output turn so it can avoid reposting the same issue as a new finding.
 2. **Re-adjudicated carry-forward** — the model separately marks which of those prior unresolved Codex comments are still relevant now. Only those count toward the PR summary.
-3. **Separated counts** — the summary reports new findings from the current run separately from prior Codex findings that still appear relevant.
+3. **Auto-resolved Codex threads** — when a prior unresolved Codex comment now looks fixed, the rerun can resolve that GitHub review thread automatically.
+4. **Separated counts** — the summary reports new findings, still-relevant prior findings, and auto-resolved prior findings separately.
 
 ## Security & Permissions
 

@@ -174,6 +174,7 @@ class _FakeGitHubClient:
         self.pr = pr
         self.calls: list[int] = []
         self.inline_comments: list[dict[str, Any]] = []
+        self.resolved_thread_ids: list[str] = []
 
     def get_pr(self, pr_number: int) -> _FakePR:
         self.calls.append(pr_number)
@@ -192,6 +193,10 @@ class _FakeGitHubClient:
     ) -> None:
         assert pr is self.pr
         self.inline_comments.append(payload.to_request_payload(head_sha))
+
+    def resolve_review_thread(self, pr: _FakePR, thread_id: str) -> None:
+        assert pr is self.pr
+        self.resolved_thread_ids.append(thread_id)
 
 
 class _FakeCodexClient:
@@ -254,6 +259,7 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
                 "overall_explanation": "Needs one fix.",
                 "overall_confidence_score": 0.9,
                 "carried_forward": [],
+                "resolved_comment_ids": [],
                 "findings": [
                     {
                         "title": "Example finding",
@@ -328,6 +334,8 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
         current_findings_count=1,
         carried_forward_count=0,
         active_findings_count=1,
+        resolved_count=0,
+        resolution_failure_count=0,
     )
     assert [finding.as_dict() for finding in result.review.findings] == [
         {
@@ -360,6 +368,7 @@ def test_process_review_dry_run_skips_summary_comment(
                         "overall_explanation": "",
                         "overall_confidence_score": None,
                         "carried_forward": [],
+                        "resolved_comment_ids": [],
                         "findings": [],
                     }
                 )
@@ -442,6 +451,7 @@ def test_process_review_summary_counts_carried_forward_codex_comments(tmp_path: 
                                 "current_evidence": "value = 1",
                             }
                         ],
+                        "resolved_comment_ids": [],
                         "findings": [],
                     }
                 )
@@ -459,6 +469,8 @@ def test_process_review_summary_counts_carried_forward_codex_comments(tmp_path: 
         current_findings_count=0,
         carried_forward_count=1,
         active_findings_count=1,
+        resolved_count=0,
+        resolution_failure_count=0,
     )
     assert "- New findings this run: 0" in pr.as_issue().created_comments[0]
     assert (
@@ -466,6 +478,189 @@ def test_process_review_summary_counts_carried_forward_codex_comments(tmp_path: 
     )
     assert "- Active findings total: 1" in pr.as_issue().created_comments[0]
     assert render_review_summary_metadata("head-sha") in pr.as_issue().created_comments[0]
+
+
+def test_process_review_resolves_stale_prior_codex_thread(tmp_path: Path) -> None:
+    (tmp_path / "src.py").write_text("value = 2\n", encoding="utf-8")
+    pr = _FakePR(
+        issue_comments=[
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\nold summary",
+                comment_id=10,
+                login="reviewer",
+            )
+        ],
+        review_threads=[
+            ReviewThreadSnapshot(
+                id="thread-1",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-1",
+                        body=_structured_review_body("value = 1"),
+                        path="src.py",
+                        line=2,
+                        original_line=2,
+                        author="reviewer",
+                    )
+                ],
+            )
+        ],
+    )
+    github_client = _FakeGitHubClient(pr)
+    codex_client = _FakeCodexClient(
+        json.dumps(
+            {
+                "overall_correctness": "patch is correct",
+                "overall_explanation": "No active issues remain.",
+                "overall_confidence_score": 0.8,
+                "carried_forward": [],
+                "resolved_comment_ids": ["comment-1"],
+                "findings": [],
+            }
+        )
+    )
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, github_client),
+        codex_client=cast(Any, codex_client),
+    )
+
+    result = workflow.process_review(7)
+
+    assert result.review.resolved_comment_ids == ["comment-1"]
+    assert github_client.resolved_thread_ids == ["thread-1"]
+    assert (
+        "<prior_codex_review_comments_candidate_resolutions>"
+        in codex_client.calls[0]["schema_prompt"]
+    )
+    assert result.summary == ReviewSummary(
+        overall_correctness="patch is correct",
+        current_findings_count=0,
+        carried_forward_count=0,
+        active_findings_count=0,
+        resolved_count=1,
+        resolution_failure_count=0,
+    )
+    assert "- Prior Codex findings auto-resolved: 1" in pr.as_issue().created_comments[0]
+
+
+def test_process_review_dry_run_reports_ready_to_resolve_prior_codex_thread(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src.py").write_text("value = 2\n", encoding="utf-8")
+    pr = _FakePR(
+        issue_comments=[
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\nold summary",
+                comment_id=10,
+                login="reviewer",
+            )
+        ],
+        review_threads=[
+            ReviewThreadSnapshot(
+                id="thread-1",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-1",
+                        body=_structured_review_body("value = 1"),
+                        path="src.py",
+                        line=2,
+                        original_line=2,
+                        author="reviewer",
+                    )
+                ],
+            )
+        ],
+    )
+    github_client = _FakeGitHubClient(pr)
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path, dry_run=True),
+        github_client=cast(Any, github_client),
+        codex_client=cast(
+            Any,
+            _FakeCodexClient(
+                json.dumps(
+                    {
+                        "overall_correctness": "patch is correct",
+                        "overall_explanation": "",
+                        "overall_confidence_score": 0.8,
+                        "carried_forward": [],
+                        "resolved_comment_ids": ["comment-1"],
+                        "findings": [],
+                    }
+                )
+            ),
+        ),
+    )
+
+    result = workflow.process_review(7)
+
+    assert result.review.resolved_comment_ids == ["comment-1"]
+    assert github_client.resolved_thread_ids == []
+    assert result.summary.resolved_count == 1
+    assert result.summary.resolution_failure_count == 0
+
+
+def test_process_review_drops_invalid_resolved_comment_ids(tmp_path: Path) -> None:
+    (tmp_path / "src.py").write_text("value = 1\n", encoding="utf-8")
+    pr = _FakePR(
+        issue_comments=[
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\nold summary",
+                comment_id=10,
+                login="reviewer",
+            )
+        ],
+        review_threads=[
+            ReviewThreadSnapshot(
+                id="thread-1",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-1",
+                        body=_structured_review_body("value = 1"),
+                        path="src.py",
+                        line=2,
+                        original_line=2,
+                        author="reviewer",
+                    )
+                ],
+            )
+        ],
+    )
+    github_client = _FakeGitHubClient(pr)
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, github_client),
+        codex_client=cast(
+            Any,
+            _FakeCodexClient(
+                json.dumps(
+                    {
+                        "overall_correctness": "patch is incorrect",
+                        "overall_explanation": "",
+                        "overall_confidence_score": 0.8,
+                        "carried_forward": [
+                            {
+                                "comment_id": "comment-1",
+                                "current_evidence": "value = 1",
+                            }
+                        ],
+                        "resolved_comment_ids": ["comment-1", "comment-unknown", "comment-1"],
+                        "findings": [],
+                    }
+                )
+            ),
+        ),
+    )
+
+    result = workflow.process_review(7)
+
+    assert result.review.carried_forward_comment_ids == ["comment-1"]
+    assert result.review.resolved_comment_ids == []
+    assert github_client.resolved_thread_ids == []
 
 
 def test_process_review_warns_when_prior_summary_delete_fails(
@@ -491,6 +686,7 @@ def test_process_review_warns_when_prior_summary_delete_fails(
                         "overall_explanation": "",
                         "overall_confidence_score": None,
                         "carried_forward": [],
+                        "resolved_comment_ids": [],
                         "findings": [],
                     }
                 )
@@ -541,6 +737,7 @@ def test_process_review_resumes_prior_thread_with_inline_incremental_diff(
                 "overall_explanation": "",
                 "overall_confidence_score": None,
                 "carried_forward": [],
+                "resolved_comment_ids": [],
                 "findings": [],
             }
         )
@@ -605,6 +802,7 @@ def test_process_review_falls_back_to_fresh_review_when_prior_sha_is_not_ancesto
                 "overall_explanation": "",
                 "overall_confidence_score": None,
                 "carried_forward": [],
+                "resolved_comment_ids": [],
                 "findings": [],
             }
         )
@@ -721,6 +919,7 @@ def test_process_review_raises_domain_error_for_missing_head_sha(
                         "overall_explanation": "",
                         "overall_confidence_score": None,
                         "carried_forward": [],
+                        "resolved_comment_ids": [],
                         "findings": [],
                     }
                 )
@@ -753,6 +952,7 @@ def test_process_review_raises_domain_error_for_issue_comment_snapshot_failure(
                 "overall_explanation": "",
                 "overall_confidence_score": None,
                 "carried_forward": [],
+                "resolved_comment_ids": [],
                 "findings": [],
             }
         )
@@ -790,6 +990,7 @@ def test_process_review_wires_real_artifacts_and_inline_posting(tmp_path: Path) 
                 "overall_explanation": "Needs one focused fix.",
                 "overall_confidence_score": 0.8,
                 "carried_forward": [],
+                "resolved_comment_ids": [],
                 "findings": [
                     {
                         "title": "Example finding",
@@ -867,6 +1068,7 @@ def test_process_review_renamed_file_posts_current_findings_without_prefilter(
                 "overall_explanation": "Needs one follow-up.",
                 "overall_confidence_score": 0.8,
                 "carried_forward": [],
+                "resolved_comment_ids": [],
                 "findings": [
                     {
                         "title": "New finding",
@@ -961,6 +1163,7 @@ def test_process_review_ignores_non_codex_threads_in_rerun_context(tmp_path: Pat
                         "current_evidence": "old",
                     }
                 ],
+                "resolved_comment_ids": [],
                 "findings": [
                     {
                         "title": "🔴 [P1] Existing finding",
@@ -1043,6 +1246,7 @@ def test_process_review_drops_invalid_carried_forward_comment_ids(tmp_path: Path
                                 "current_evidence": "value = 1",
                             },
                         ],
+                        "resolved_comment_ids": [],
                         "findings": [],
                     }
                 )
