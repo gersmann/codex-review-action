@@ -515,7 +515,7 @@ def test_process_review_resolves_stale_prior_codex_thread(tmp_path: Path) -> Non
                 "overall_explanation": "No active issues remain.",
                 "overall_confidence_score": 0.8,
                 "carried_forward": [],
-                "resolved_comment_ids": ["comment-1"],
+                "resolved_comment_ids": [],
                 "findings": [],
             }
         )
@@ -587,7 +587,7 @@ def test_process_review_dry_run_reports_ready_to_resolve_prior_codex_thread(
                         "overall_explanation": "",
                         "overall_confidence_score": 0.8,
                         "carried_forward": [],
-                        "resolved_comment_ids": ["comment-1"],
+                        "resolved_comment_ids": [],
                         "findings": [],
                     }
                 )
@@ -659,6 +659,74 @@ def test_process_review_drops_invalid_resolved_comment_ids(tmp_path: Path) -> No
     result = workflow.process_review(7)
 
     assert result.review.carried_forward_comment_ids == ["comment-1"]
+    assert result.review.resolved_comment_ids == []
+    assert github_client.resolved_thread_ids == []
+
+
+def test_process_review_does_not_auto_resolve_stale_thread_when_new_finding_replaces_it(
+    tmp_path: Path,
+) -> None:
+    sample_file = tmp_path / "src.py"
+    sample_file.write_text("value = 2\n", encoding="utf-8")
+    pr = _FakePR(
+        issue_comments=[
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\nold summary",
+                comment_id=10,
+                login="reviewer",
+            )
+        ],
+        review_threads=[
+            ReviewThreadSnapshot(
+                id="thread-1",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-1",
+                        body=_structured_review_body("value = 1"),
+                        path="src.py",
+                        line=2,
+                        original_line=2,
+                        author="reviewer",
+                    )
+                ],
+            )
+        ],
+    )
+    github_client = _FakeGitHubClient(pr)
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, github_client),
+        codex_client=cast(
+            Any,
+            _FakeCodexClient(
+                json.dumps(
+                    {
+                        "overall_correctness": "patch is incorrect",
+                        "overall_explanation": "Issue still exists in updated form.",
+                        "overall_confidence_score": 0.9,
+                        "carried_forward": [],
+                        "resolved_comment_ids": [],
+                        "findings": [
+                            {
+                                "title": "Updated finding",
+                                "body": "Still broken nearby.",
+                                "confidence_score": 0.9,
+                                "priority": 1,
+                                "code_location": {
+                                    "absolute_file_path": str(sample_file.resolve()),
+                                    "line_range": {"start": 1, "end": 2},
+                                },
+                            }
+                        ],
+                    }
+                )
+            ),
+        ),
+    )
+
+    result = workflow.process_review(7)
+
     assert result.review.resolved_comment_ids == []
     assert github_client.resolved_thread_ids == []
 

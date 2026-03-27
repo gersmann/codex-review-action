@@ -22,6 +22,7 @@ from ..core.models import (
     REVIEW_OUTPUT_SCHEMA,
     CarriedForwardReviewComment,
     PriorCodexReviewComment,
+    ReviewFinding,
     ReviewRunResult,
 )
 from ..review.anchor_engine import build_anchor_maps
@@ -434,6 +435,7 @@ class ReviewWorkflow:
             result.resolved_comment_ids,
             prior_codex_comments,
             {item.comment_id for item in carried_forward},
+            result.findings,
         )
         if (
             carried_forward == result.carried_forward
@@ -491,17 +493,27 @@ class ReviewWorkflow:
         raw_resolved_comment_ids: list[str],
         prior_codex_comments: list[PriorCodexReviewComment],
         carried_forward_comment_ids: set[str],
+        findings: list[ReviewFinding],
     ) -> list[str]:
-        valid_comment_ids = {
-            comment.id for comment in prior_codex_comments if not comment.is_currently_applicable
+        valid_comments = {
+            comment.id: comment
+            for comment in prior_codex_comments
+            if not comment.is_currently_applicable
         }
         normalized_resolved_comment_ids: list[str] = []
         seen_comment_ids: set[str] = set()
         dropped_count = 0
+        for comment in valid_comments.values():
+            if comment.id in carried_forward_comment_ids:
+                continue
+            if self._has_related_new_finding(comment, findings):
+                continue
+            normalized_resolved_comment_ids.append(comment.id)
+            seen_comment_ids.add(comment.id)
         for comment_id in raw_resolved_comment_ids:
             if (
                 comment_id in seen_comment_ids
-                or comment_id not in valid_comment_ids
+                or comment_id not in valid_comments
                 or comment_id in carried_forward_comment_ids
             ):
                 dropped_count += 1
@@ -514,6 +526,30 @@ class ReviewWorkflow:
                 f"Dropped {dropped_count} invalid resolved_comment_ids entries from structured output",
             )
         return normalized_resolved_comment_ids
+
+    def _has_related_new_finding(
+        self,
+        comment: PriorCodexReviewComment,
+        findings: list[ReviewFinding],
+    ) -> bool:
+        repo_root = self.config.resolved_repo_root
+        try:
+            comment_path = (repo_root / comment.path).resolve()
+        except OSError:
+            return False
+        lower_bound = max(1, comment.line - 3)
+        upper_bound = comment.line + 3
+        for finding in findings:
+            code_location = finding.code_location
+            try:
+                finding_path = Path(code_location.absolute_file_path).resolve()
+            except OSError:
+                continue
+            if finding_path != comment_path:
+                continue
+            if code_location.end_line >= lower_bound and code_location.start_line <= upper_bound:
+                return True
+        return False
 
     def _build_summary(
         self,

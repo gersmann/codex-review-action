@@ -30,7 +30,7 @@ jobs:
         with:
           mode: review
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-          model: gpt-5.1-codex-max
+          model: gpt-5.4
           reasoning_effort: medium
           debug_level: 1
 
