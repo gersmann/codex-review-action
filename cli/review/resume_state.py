@@ -6,9 +6,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from codex.app_server import AppServerClient, AppServerProcessOptions, AppServerThreadListOptions
+from codex.app_server.models import ThreadListResult
+from codex.protocol import types as protocol
+
 SUMMARY_METADATA_RE = re.compile(r"<!--\s*codex-review-meta\s+({.*?})\s*-->")
-SESSION_INDEX_PATH = "session_index.jsonl"
-ROLLOUTS_SUBDIR = "sessions"
 REVIEW_RESUME_CACHE_VERSION = "v1"
 MAX_INLINE_INCREMENTAL_DIFF_LINES = 500
 
@@ -112,87 +114,37 @@ def build_review_resume_outputs(
     }
 
 
-def load_latest_thread_id(codex_home: Path) -> str | None:
-    session_index_path = codex_home / SESSION_INDEX_PATH
-    lines: list[str] | None = None
+def load_latest_thread_id(codex_home: Path, cwd: Path) -> str | None:
+    threads = _list_stored_threads(codex_home=codex_home, cwd=cwd)
+    if not threads:
+        return None
+    latest_thread = max(threads, key=lambda thread: thread.updatedAt)
+    return latest_thread.id
+
+
+def _list_stored_threads(*, codex_home: Path, cwd: Path) -> list[protocol.Thread]:
+    process_options = AppServerProcessOptions(env={"CODEX_HOME": str(codex_home)})
+    list_options = AppServerThreadListOptions(cwd=str(cwd.resolve()))
+    all_threads: list[protocol.Thread] = []
+
     try:
-        lines = session_index_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        lines = None
-
-    latest_thread_id = _load_latest_thread_id_from_index(lines)
-    if latest_thread_id is not None:
-        return latest_thread_id
-    return _load_latest_thread_id_from_rollouts(codex_home)
-
-
-def _load_latest_thread_id_from_index(lines: list[str] | None) -> str | None:
-    if lines is None:
-        return None
-    latest_thread_id: str | None = None
-    latest_updated_at = ""
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        thread_id = payload.get("id")
-        updated_at = payload.get("updated_at")
-        if not isinstance(thread_id, str) or not thread_id:
-            continue
-        if not isinstance(updated_at, str) or not updated_at:
-            continue
-        if updated_at >= latest_updated_at:
-            latest_thread_id = thread_id
-            latest_updated_at = updated_at
-    return latest_thread_id
+        with AppServerClient.connect_stdio(process_options) as client:
+            cursor: str | None = None
+            while True:
+                page = client.list_threads_page(list_options.model_copy(update={"cursor": cursor}))
+                all_threads.extend(page.data)
+                cursor = _next_cursor(page)
+                if cursor is None:
+                    return all_threads
+    except Exception:
+        return []
 
 
-def _load_latest_thread_id_from_rollouts(codex_home: Path) -> str | None:
-    rollouts_root = codex_home / ROLLOUTS_SUBDIR
-    if not rollouts_root.is_dir():
+def _next_cursor(page: ThreadListResult) -> str | None:
+    next_cursor = page.next_cursor
+    if not isinstance(next_cursor, str):
         return None
-
-    rollout_paths = sorted(
-        rollouts_root.rglob("*.jsonl"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    for rollout_path in rollout_paths:
-        thread_id = _read_thread_id_from_rollout(rollout_path)
-        if thread_id is not None:
-            return thread_id
-    return None
-
-
-def _read_thread_id_from_rollout(rollout_path: Path) -> str | None:
-    try:
-        with rollout_path.open(encoding="utf-8") as handle:
-            first_line = handle.readline().strip()
-    except OSError:
-        return None
-    if not first_line:
-        return None
-    try:
-        payload = json.loads(first_line)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    if payload.get("type") != "session_meta":
-        return None
-    session_payload = payload.get("payload")
-    if not isinstance(session_payload, dict):
-        return None
-    thread_id = session_payload.get("id")
-    if not isinstance(thread_id, str):
-        return None
-    normalized = thread_id.strip()
+    normalized = next_cursor.strip()
     return normalized or None
 
 

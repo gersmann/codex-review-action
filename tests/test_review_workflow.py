@@ -787,10 +787,6 @@ def test_process_review_resumes_prior_thread_with_inline_incremental_diff(
     (tmp_path / "src.py").write_text("value = 2\n", encoding="utf-8")
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
-    (codex_home / "session_index.jsonl").write_text(
-        '{"id":"thread-1","thread_name":"Review","updated_at":"2026-03-27T10:00:00Z"}\n',
-        encoding="utf-8",
-    )
     prior_summary = _FakeIssueComment(
         (f"{SUMMARY_MARKER}\n{render_review_summary_metadata('prev-sha')}\nold summary"),
         comment_id=10,
@@ -834,6 +830,10 @@ def test_process_review_resumes_prior_thread_with_inline_incremental_diff(
     monkeypatch.setattr(
         "cli.workflows.review_workflow.git_commit_shas",
         lambda revision_range: ["commit-1"],
+    )
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.load_latest_thread_id",
+        lambda codex_home, cwd: "thread-1",
     )
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CODEX_REVIEW_PREVIOUS_HEAD_SHA", "prev-sha")

@@ -252,7 +252,7 @@ class ReviewWorkflow:
             return None
 
         codex_home = Path(codex_home_value)
-        resume_thread_id = load_latest_thread_id(codex_home)
+        resume_thread_id = load_latest_thread_id(codex_home, Path.cwd())
         if resume_thread_id is None:
             self._debug(
                 1,

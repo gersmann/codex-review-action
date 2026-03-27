@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 from cli.review.resume_state import (
+    _list_stored_threads,
     build_review_resume_outputs,
     compute_review_cache_key,
     extract_current_head_sha,
@@ -58,37 +61,86 @@ def test_build_review_resume_outputs_uses_previous_sha_for_restore_key(tmp_path:
     }
 
 
-def test_load_latest_thread_id_uses_most_recent_updated_at(tmp_path: Path) -> None:
-    session_index = tmp_path / "session_index.jsonl"
-    session_index.write_text(
-        "\n".join(
-            [
-                '{"id":"thread-1","thread_name":"Older","updated_at":"2026-03-27T10:00:00Z"}',
-                '{"id":"thread-2","thread_name":"Newer","updated_at":"2026-03-27T11:00:00Z"}',
-                '{"id":"thread-3","thread_name":"Broken"}',
-                "not-json",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
+def test_load_latest_thread_id_uses_most_recent_updated_at(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "cli.review.resume_state._list_stored_threads",
+        lambda *, codex_home, cwd: [
+            SimpleNamespace(id="thread-1", updatedAt=100),
+            SimpleNamespace(id="thread-2", updatedAt=200),
+        ],
     )
 
-    assert load_latest_thread_id(tmp_path) == "thread-2"
-    assert load_latest_thread_id(tmp_path / "missing") is None
+    assert load_latest_thread_id(tmp_path, tmp_path) == "thread-2"
 
 
-def test_load_latest_thread_id_falls_back_to_latest_rollout_file(tmp_path: Path) -> None:
-    rollout_dir = tmp_path / "sessions" / "2026" / "03" / "27"
-    rollout_dir.mkdir(parents=True)
-    older_rollout = rollout_dir / "rollout-older.jsonl"
-    older_rollout.write_text(
-        '{"timestamp":"2026-03-27T10:00:00Z","type":"session_meta","payload":{"id":"thread-older"}}\n',
-        encoding="utf-8",
-    )
-    newer_rollout = rollout_dir / "rollout-newer.jsonl"
-    newer_rollout.write_text(
-        '{"timestamp":"2026-03-27T11:00:00Z","type":"session_meta","payload":{"id":"thread-newer"}}\n',
-        encoding="utf-8",
+def test_load_latest_thread_id_returns_none_when_sdk_lookup_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "cli.review.resume_state._list_stored_threads",
+        lambda *, codex_home, cwd: [],
     )
 
-    assert load_latest_thread_id(tmp_path) == "thread-newer"
+    assert load_latest_thread_id(tmp_path, tmp_path) is None
+
+
+def test_list_stored_threads_uses_sdk_pagination(monkeypatch, tmp_path: Path) -> None:
+    pages = [
+        SimpleNamespace(
+            data=[SimpleNamespace(id="thread-1", updatedAt=100)],
+            next_cursor="cursor-2",
+        ),
+        SimpleNamespace(
+            data=[SimpleNamespace(id="thread-2", updatedAt=200)],
+            next_cursor=None,
+        ),
+    ]
+    captured: dict[str, Any] = {}
+
+    class _FakeClient:
+        def __enter__(self) -> _FakeClient:
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            _ = (exc_type, exc, tb)
+
+        def list_threads_page(self, options):
+            calls = captured.setdefault("calls", [])
+            assert isinstance(calls, list)
+            calls.append(options)
+            return pages[len(calls) - 1]
+
+    def _fake_connect_stdio(process_options):
+        captured["process_options"] = process_options
+        return _FakeClient()
+
+    monkeypatch.setattr(
+        "cli.review.resume_state.AppServerClient.connect_stdio",
+        _fake_connect_stdio,
+    )
+
+    threads = _list_stored_threads(codex_home=tmp_path / "codex-home", cwd=tmp_path)
+
+    assert [thread.id for thread in threads] == ["thread-1", "thread-2"]
+    process_options = cast(Any, captured["process_options"])
+    assert process_options.env == {"CODEX_HOME": str(tmp_path / "codex-home")}
+    calls = cast(list[Any], captured["calls"])
+    assert [call.cwd for call in calls] == [str(tmp_path.resolve()), str(tmp_path.resolve())]
+    assert [call.cursor for call in calls] == [None, "cursor-2"]
+
+
+def test_list_stored_threads_returns_empty_on_sdk_error(monkeypatch, tmp_path: Path) -> None:
+    def _fake_connect_stdio(process_options):
+        _ = process_options
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "cli.review.resume_state.AppServerClient.connect_stdio",
+        _fake_connect_stdio,
+    )
+
+    assert _list_stored_threads(codex_home=tmp_path / "codex-home", cwd=tmp_path) == []
