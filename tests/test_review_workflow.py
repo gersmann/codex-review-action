@@ -604,6 +604,82 @@ def test_process_review_dry_run_reports_ready_to_resolve_prior_codex_thread(
     assert result.summary.resolution_failure_count == 0
 
 
+def test_process_review_matches_github_bot_logins_across_issue_and_thread_apis(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "action.yml").write_text(
+        "name: action\n"
+        "runs:\n"
+        "  using: composite\n"
+        "  steps:\n"
+        "    - name: Save review Codex cache\n"
+        "      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' && !(steps.review_codex_cache.outputs.cache-hit == 'true' && steps.review_resume_state.outputs.restore_key == steps.review_resume_state.outputs.current_cache_key) }}\n"
+        "      uses: actions/cache/save@v4\n",
+        encoding="utf-8",
+    )
+    stale_body = (
+        "**Current code:**\n```yaml\n"
+        "    - name: Save review Codex cache\n"
+        "      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' }}\n"
+        "      uses: actions/cache/save@v4\n"
+        "```\n\n"
+        "**Problem:** stale.\n\n"
+        "**Fix:**\n```yaml\n"
+        "    - name: Save review Codex cache\n"
+        "      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' && !(steps.review_codex_cache.outputs.cache-hit == 'true' && steps.review_resume_state.outputs.restore_key == steps.review_resume_state.outputs.current_cache_key) }}\n"
+        "      uses: actions/cache/save@v4\n"
+        "```\n\n---"
+    )
+    pr = _FakePR(
+        issue_comments=[
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\nold summary",
+                comment_id=10,
+                login="github-actions[bot]",
+            )
+        ],
+        review_threads=[
+            ReviewThreadSnapshot(
+                id="thread-1",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-1",
+                        body=stale_body,
+                        path="action.yml",
+                        line=136,
+                        original_line=136,
+                        author="github-actions",
+                    )
+                ],
+            )
+        ],
+    )
+    github_client = _FakeGitHubClient(pr)
+    codex_client = _FakeCodexClient(
+        json.dumps(
+            {
+                "overall_correctness": "patch is correct",
+                "overall_explanation": "No active issues remain.",
+                "overall_confidence_score": 0.8,
+                "carried_forward": [],
+                "resolved_comment_ids": [],
+                "findings": [],
+            }
+        )
+    )
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, github_client),
+        codex_client=cast(Any, codex_client),
+    )
+
+    result = workflow.process_review(7)
+
+    assert result.review.resolved_comment_ids == ["comment-1"]
+    assert github_client.resolved_thread_ids == ["thread-1"]
+
+
 def test_process_review_drops_invalid_resolved_comment_ids(tmp_path: Path) -> None:
     (tmp_path / "src.py").write_text("value = 1\n", encoding="utf-8")
     pr = _FakePR(

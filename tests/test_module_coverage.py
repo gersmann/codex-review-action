@@ -409,10 +409,11 @@ def test_review_dedupe_helpers(tmp_path: Path) -> None:
         list[IssueCommentLikeProtocol],
         [
             _FakeIssueComment(f"{SUMMARY_MARKER}\nold summary", login="bot"),
+            _FakeIssueComment(f"{SUMMARY_MARKER}\nold summary", login="github-actions[bot]"),
             _FakeIssueComment("human note", login="alice"),
         ],
     )
-    assert collect_codex_author_logins(issue_comments) == {"bot"}
+    assert collect_codex_author_logins(issue_comments) == {"bot", "github-actions"}
 
     (tmp_path / "renamed.py").write_text("value = 1\n", encoding="utf-8")
     structured_body = (
@@ -470,6 +471,20 @@ def test_review_dedupe_helpers(tmp_path: Path) -> None:
                 ],
             ),
             ReviewThreadSnapshot(
+                id="thread-5",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-5",
+                        body=structured_body,
+                        path="renamed.py",
+                        line=9,
+                        original_line=9,
+                        author="github-actions",
+                    )
+                ],
+            ),
+            ReviewThreadSnapshot(
                 id="thread-4",
                 is_resolved=True,
                 comments=[
@@ -484,7 +499,7 @@ def test_review_dedupe_helpers(tmp_path: Path) -> None:
                 ],
             ),
         ],
-        {"bot"},
+        {"bot", "github-actions"},
         tmp_path,
     )
     assert prior_codex_comments == [
@@ -510,11 +525,21 @@ def test_review_dedupe_helpers(tmp_path: Path) -> None:
             current_code="value = 2",
             is_currently_applicable=False,
         ),
+        PriorCodexReviewComment(
+            id="comment-5",
+            thread_id="thread-5",
+            path="renamed.py",
+            line=9,
+            body=structured_body,
+            current_code="value = 1",
+            is_currently_applicable=True,
+        ),
     ]
     assert render_prior_codex_comments_for_prompt(prior_codex_comments) == "\n".join(
         [
             "<prior_codex_review_comments>",
             '{"id": "comment-1", "thread_id": "thread-1", "path": "renamed.py", "line": 11, "current_code": "value = 1", "body": "**Current code:**\\n```python\\nvalue = 1\\n```\\n\\n**Problem:** still broken.\\n\\n**Fix:**\\n```python\\nvalue = 1\\n```\\n\\n---"}',
+            '{"id": "comment-5", "thread_id": "thread-5", "path": "renamed.py", "line": 9, "current_code": "value = 1", "body": "**Current code:**\\n```python\\nvalue = 1\\n```\\n\\n**Problem:** still broken.\\n\\n**Fix:**\\n```python\\nvalue = 1\\n```\\n\\n---"}',
             "</prior_codex_review_comments>",
             "<prior_codex_review_comments_candidate_resolutions>",
             '{"id": "comment-3", "thread_id": "thread-3", "path": "renamed.py", "line": 5, "current_code": "value = 2", "body": "**Current code:**\\n```python\\nvalue = 2\\n```\\n\\n**Problem:** stale.\\n\\n**Fix:**\\n```python\\nvalue = 2\\n```\\n\\n---"}',

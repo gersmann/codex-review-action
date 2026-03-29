@@ -36,7 +36,7 @@ def collect_codex_author_logins(
             continue
         author_login = issue_comment.user.login
         if isinstance(author_login, str) and author_login:
-            author_logins.add(author_login)
+            author_logins.add(_normalize_author_login(author_login))
     return author_logins
 
 
@@ -56,7 +56,7 @@ def collect_prior_codex_review_comments(
 
         first_comment = review_thread.comments[0]
         prompt_line = first_comment.prompt_line
-        if first_comment.author not in codex_author_logins:
+        if _normalize_author_login(first_comment.author) not in codex_author_logins:
             continue
         if not first_comment.body or not first_comment.path or not isinstance(prompt_line, int):
             continue
@@ -163,3 +163,10 @@ def _resolve_repo_file(repo_root: Path, relative_path: str) -> Path | None:
     if not repo_file.is_file():
         return None
     return repo_file
+
+
+def _normalize_author_login(author_login: str) -> str:
+    normalized = author_login.strip()
+    if normalized.endswith("[bot]"):
+        return normalized[:-5]
+    return normalized

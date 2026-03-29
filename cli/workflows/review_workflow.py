@@ -407,6 +407,12 @@ class ReviewWorkflow:
                 codex_author_logins,
                 repo_root,
             )
+            self._debug(
+                1,
+                "Prior Codex review thread matching: "
+                f"{len(codex_author_logins)} normalized author login(s), "
+                f"{len(prior_codex_comments)} unresolved thread(s) matched",
+            )
         return _ReviewSnapshots(
             review_comments=review_comments_snapshot,
             issue_comments=issue_comments_snapshot,
