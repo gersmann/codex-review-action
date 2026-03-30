@@ -75,7 +75,6 @@ def test_skips_summary_only_review_when_no_inline_comments(tmp_path: Path):
         {
             "findings": [],
             "carried_forward": [],
-            "resolved_comment_ids": [],
             "overall_correctness": "patch is correct",
             "overall_explanation": "",
             "overall_confidence_score": None,
@@ -124,7 +123,6 @@ def test_creates_bundled_review_with_inline_comment(tmp_path: Path):
             "overall_explanation": "example",
             "overall_confidence_score": None,
             "carried_forward": [],
-            "resolved_comment_ids": [],
             "findings": [
                 {
                     "title": "Example finding",
@@ -173,7 +171,6 @@ def test_post_results_reports_dropped_findings(tmp_path: Path, capsys) -> None:
             overall_explanation="example",
             overall_confidence_score=None,
             carried_forward=[],
-            resolved_comment_ids=[],
             findings=[
                 ReviewFinding(
                     title="Unknown file A",

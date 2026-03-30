@@ -22,7 +22,6 @@ from ..core.models import (
     REVIEW_OUTPUT_SCHEMA,
     CarriedForwardReviewComment,
     PriorCodexReviewComment,
-    ReviewFinding,
     ReviewRunResult,
 )
 from ..review.anchor_engine import build_anchor_maps
@@ -62,31 +61,17 @@ class _ReviewSnapshots:
 
 
 @dataclass(frozen=True)
-class ThreadResolutionOutcome:
-    resolved_count: int
-    failed_count: int
-    dry_run: bool = False
-
-    @classmethod
-    def empty(cls, *, dry_run: bool) -> ThreadResolutionOutcome:
-        return cls(resolved_count=0, failed_count=0, dry_run=dry_run)
-
-
-@dataclass(frozen=True)
 class ReviewSummary:
     overall_correctness: str
     current_findings_count: int
     carried_forward_count: int
     active_findings_count: int
-    resolved_count: int
-    resolution_failure_count: int
 
 
 @dataclass(frozen=True)
 class ReviewWorkflowResult:
     review: ReviewRunResult
     posting_outcome: ReviewPostingOutcome
-    resolution_outcome: ThreadResolutionOutcome
     summary: ReviewSummary
 
 
@@ -102,28 +87,17 @@ def _build_review_summary(
     review: ReviewRunResult,
     summary: ReviewSummary,
     posting_outcome: ReviewPostingOutcome,
-    resolution_outcome: ThreadResolutionOutcome,
     *,
     reviewed_head_sha: str,
 ) -> str:
-    resolved_label = (
-        "Prior Codex findings ready to resolve"
-        if resolution_outcome.dry_run
-        else "Prior Codex findings auto-resolved"
-    )
     summary_lines = [
         SUMMARY_MARKER,
         render_review_summary_metadata(reviewed_head_sha),
         f"- Overall: {summary.overall_correctness.strip() or 'patch is correct'}",
         f"- New findings this run: {summary.current_findings_count}",
         f"- Prior unresolved Codex findings still relevant: {summary.carried_forward_count}",
-        f"- {resolved_label}: {summary.resolved_count}",
         f"- Active findings total: {summary.active_findings_count}",
     ]
-    if summary.resolution_failure_count > 0:
-        summary_lines.append(
-            f"- Prior Codex thread resolution failures: {summary.resolution_failure_count}"
-        )
     if posting_outcome.dropped_count > 0:
         summary_lines.append(
             f"- Findings not publishable: {posting_outcome.dropped_count} ({posting_outcome.describe_drops()})"
@@ -143,15 +117,6 @@ def _build_review_summary(
             f"{summary.carried_forward_count} prior unresolved Codex {noun} "
             f"{verb} re-adjudicated as still relevant."
         )
-    if summary.resolved_count > 0:
-        noun = "finding" if summary.resolved_count == 1 else "findings"
-        verb = "is" if resolution_outcome.dry_run and summary.resolved_count == 1 else "are"
-        if not resolution_outcome.dry_run:
-            verb = "was" if summary.resolved_count == 1 else "were"
-        action = "ready to resolve" if resolution_outcome.dry_run else "auto-resolved"
-        summary_lines.append("")
-        summary_lines.append(f"{summary.resolved_count} prior Codex {noun} {verb} {action}.")
-
     summary_lines.append("")
     summary_lines.append(SUMMARY_TIP)
     return "\n".join(summary_lines)
@@ -251,7 +216,11 @@ class ReviewWorkflow:
             return None
 
         codex_home = Path(codex_home_value)
-        resume_thread_id = load_latest_thread_id(codex_home, Path.cwd())
+        try:
+            resume_thread_id = load_latest_thread_id(codex_home, Path.cwd())
+        except ReviewResumeError as exc:
+            self._debug(1, f"{exc}; starting fresh review")
+            return None
 
         revision_range = f"{previous_reviewed_sha}..{head_sha}"
         try:
@@ -330,18 +299,11 @@ class ReviewWorkflow:
                 "that still describe live issues in the current patch. "
                 "For each carried_forward entry, copy the exact current_code snippet into "
                 '"current_evidence" verbatim. '
-                'Use "resolved_comment_ids" only for entries from '
-                "prior_codex_review_comments_candidate_resolutions that now look fixed. "
                 "Do not include stale or fixed comments in carried_forward. "
-                "Do not include a carried-forward entry for an issue already captured in findings. "
-                "Do not include a resolved_comment_ids entry for an issue that is still present "
-                "or already captured in findings."
+                "Do not include a carried-forward entry for an issue already captured in findings."
             )
         else:
-            lines.append(
-                'Produce the JSON review output now. Return "carried_forward" as [] and '
-                '"resolved_comment_ids" as [].'
-            )
+            lines.append('Produce the JSON review output now. Return "carried_forward" as [].')
         return "\n".join(lines)
 
     def _build_rename_map(self, changed_files: list[ChangedFileProtocol]) -> dict[str, str]:
@@ -428,16 +390,7 @@ class ReviewWorkflow:
             result.carried_forward,
             prior_codex_comments,
         )
-        resolved_comment_ids = self._normalize_resolved_comment_ids(
-            result.resolved_comment_ids,
-            prior_codex_comments,
-            {item.comment_id for item in carried_forward},
-            result.findings,
-        )
-        if (
-            carried_forward == result.carried_forward
-            and resolved_comment_ids == result.resolved_comment_ids
-        ):
+        if carried_forward == result.carried_forward:
             return result
         return ReviewRunResult(
             overall_correctness=result.overall_correctness,
@@ -445,7 +398,6 @@ class ReviewWorkflow:
             overall_confidence_score=result.overall_confidence_score,
             findings=list(result.findings),
             carried_forward=carried_forward,
-            resolved_comment_ids=resolved_comment_ids,
         )
 
     def _normalize_carried_forward(
@@ -485,73 +437,9 @@ class ReviewWorkflow:
             )
         return normalized_carried_forward
 
-    def _normalize_resolved_comment_ids(
-        self,
-        raw_resolved_comment_ids: list[str],
-        prior_codex_comments: list[PriorCodexReviewComment],
-        carried_forward_comment_ids: set[str],
-        findings: list[ReviewFinding],
-    ) -> list[str]:
-        valid_comments = {
-            comment.id: comment
-            for comment in prior_codex_comments
-            if not comment.is_currently_applicable
-        }
-        normalized_resolved_comment_ids: list[str] = []
-        seen_comment_ids: set[str] = set()
-        dropped_count = 0
-        for comment in valid_comments.values():
-            if comment.id in carried_forward_comment_ids:
-                continue
-            if self._has_related_new_finding(comment, findings):
-                continue
-            normalized_resolved_comment_ids.append(comment.id)
-            seen_comment_ids.add(comment.id)
-        for comment_id in raw_resolved_comment_ids:
-            if (
-                comment_id in seen_comment_ids
-                or comment_id not in valid_comments
-                or comment_id in carried_forward_comment_ids
-            ):
-                dropped_count += 1
-                continue
-            normalized_resolved_comment_ids.append(comment_id)
-            seen_comment_ids.add(comment_id)
-        if dropped_count > 0:
-            self._debug(
-                1,
-                f"Dropped {dropped_count} invalid resolved_comment_ids entries from structured output",
-            )
-        return normalized_resolved_comment_ids
-
-    def _has_related_new_finding(
-        self,
-        comment: PriorCodexReviewComment,
-        findings: list[ReviewFinding],
-    ) -> bool:
-        repo_root = self.config.resolved_repo_root
-        try:
-            comment_path = (repo_root / comment.path).resolve()
-        except OSError:
-            return False
-        lower_bound = max(1, comment.line - 3)
-        upper_bound = comment.line + 3
-        for finding in findings:
-            code_location = finding.code_location
-            try:
-                finding_path = Path(code_location.absolute_file_path).resolve()
-            except OSError:
-                continue
-            if finding_path != comment_path:
-                continue
-            if code_location.end_line >= lower_bound and code_location.start_line <= upper_bound:
-                return True
-        return False
-
     def _build_summary(
         self,
         review: ReviewRunResult,
-        resolution_outcome: ThreadResolutionOutcome,
     ) -> ReviewSummary:
         current_findings_count = len(review.findings)
         carried_forward_count = len(review.carried_forward)
@@ -568,8 +456,6 @@ class ReviewWorkflow:
             current_findings_count=current_findings_count,
             carried_forward_count=carried_forward_count,
             active_findings_count=active_findings_count,
-            resolved_count=resolution_outcome.resolved_count,
-            resolution_failure_count=resolution_outcome.failed_count,
         )
 
     def _parse_structured_review_output(self, output: str) -> ReviewRunResult:
@@ -638,7 +524,8 @@ class ReviewWorkflow:
         prompt_sections = [base_instructions]
         if resume_block:
             prompt_sections.append(resume_block)
-        prompt_sections.append(raw_prompt)
+        else:
+            prompt_sections.append(raw_prompt)
         prompt = "\n\n".join(section for section in prompt_sections if section)
 
         self._debug(2, f"Prompt length: {len(prompt)} chars")
@@ -667,18 +554,12 @@ class ReviewWorkflow:
             head_sha,
             rename_map,
         )
-        resolution_outcome = self._resolve_prior_codex_threads(
-            parsed_result,
-            snapshots.prior_codex_comments,
-            pr,
-        )
-        summary = self._build_summary(parsed_result, resolution_outcome)
+        summary = self._build_summary(parsed_result)
 
         summary_text = _build_review_summary(
             parsed_result,
             summary,
             posting_outcome,
-            resolution_outcome,
             reviewed_head_sha=head_sha,
         )
         self._publish_summary(pr, summary_text)
@@ -686,58 +567,7 @@ class ReviewWorkflow:
         return ReviewWorkflowResult(
             review=parsed_result,
             posting_outcome=posting_outcome,
-            resolution_outcome=resolution_outcome,
             summary=summary,
-        )
-
-    def _resolve_prior_codex_threads(
-        self,
-        result: ReviewRunResult,
-        prior_codex_comments: list[PriorCodexReviewComment],
-        pr: PullRequestLikeProtocol,
-    ) -> ThreadResolutionOutcome:
-        if not result.resolved_comment_ids:
-            return ThreadResolutionOutcome.empty(dry_run=self.config.dry_run)
-
-        comment_by_id = {
-            comment.id: comment
-            for comment in prior_codex_comments
-            if not comment.is_currently_applicable
-        }
-        resolved_count = 0
-        failed_count = 0
-        seen_thread_ids: set[str] = set()
-        for comment_id in result.resolved_comment_ids:
-            comment = comment_by_id.get(comment_id)
-            if comment is None or comment.thread_id in seen_thread_ids:
-                continue
-            seen_thread_ids.add(comment.thread_id)
-            if self.config.dry_run:
-                self._debug(
-                    1,
-                    "DRY_RUN: would resolve prior Codex review thread "
-                    f"{comment.thread_id} for comment {comment_id}",
-                )
-                resolved_count += 1
-                continue
-            try:
-                self.github_client.resolve_review_thread(pr, comment.thread_id)
-                resolved_count += 1
-                self._debug(
-                    1,
-                    f"Resolved prior Codex review thread {comment.thread_id} for comment {comment_id}",
-                )
-            except Exception as exc:
-                failed_count += 1
-                self._debug(
-                    1,
-                    "Failed to resolve prior Codex review thread "
-                    f"{comment.thread_id} for comment {comment_id}: {exc}",
-                )
-        return ThreadResolutionOutcome(
-            resolved_count=resolved_count,
-            failed_count=failed_count,
-            dry_run=self.config.dry_run,
         )
 
     def _post_results(

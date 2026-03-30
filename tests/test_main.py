@@ -10,12 +10,11 @@ from cli.review.posting import ReviewPostingOutcome
 from cli.workflows.review_workflow import (
     ReviewSummary,
     ReviewWorkflowResult,
-    ThreadResolutionOutcome,
 )
 
 
 def _make_review_result(
-    *, findings_count: int, carried_forward_count: int = 0, resolved_count: int = 0
+    *, findings_count: int, carried_forward_count: int = 0
 ) -> ReviewWorkflowResult:
     findings: list[dict[str, object]] = []
     for index in range(findings_count):
@@ -44,12 +43,10 @@ def _make_review_result(
                     }
                     for index in range(carried_forward_count)
                 ],
-                "resolved_comment_ids": [],
                 "findings": findings,
             }
         ),
         posting_outcome=ReviewPostingOutcome.empty(findings_count),
-        resolution_outcome=ThreadResolutionOutcome.empty(dry_run=False),
         summary=ReviewSummary(
             overall_correctness=(
                 "patch is incorrect"
@@ -59,8 +56,6 @@ def _make_review_result(
             current_findings_count=findings_count,
             carried_forward_count=carried_forward_count,
             active_findings_count=findings_count + carried_forward_count,
-            resolved_count=resolved_count,
-            resolution_failure_count=0,
         ),
     )
 
@@ -405,7 +400,7 @@ def test_main_reports_carried_forward_findings_separately(monkeypatch, capsys) -
     ) in capsys.readouterr().out
 
 
-def test_main_reports_auto_resolved_findings_separately(monkeypatch, capsys) -> None:
+def test_main_reports_clean_summary_without_resolution_counts(monkeypatch, capsys) -> None:
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
@@ -418,7 +413,7 @@ def test_main_reports_auto_resolved_findings_separately(monkeypatch, capsys) -> 
 
         def process_review(self, pr_number: int) -> ReviewWorkflowResult:
             assert pr_number == 17
-            return _make_review_result(findings_count=0, resolved_count=2)
+            return _make_review_result(findings_count=0)
 
     monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
     monkeypatch.setattr(main_module, "EditWorkflow", object)
@@ -431,10 +426,7 @@ def test_main_reports_auto_resolved_findings_separately(monkeypatch, capsys) -> 
     rc = main_module.main()
 
     assert rc == 0
-    assert (
-        "Review completed: patch is correct, 0 new findings, "
-        "2 prior findings auto-resolved (0 active total)"
-    ) in capsys.readouterr().out
+    assert "Review completed: patch is correct, 0 findings" in capsys.readouterr().out
 
 
 def test_main_returns_one_for_review_workflow_errors(monkeypatch, capsys) -> None:

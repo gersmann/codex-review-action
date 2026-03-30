@@ -175,7 +175,6 @@ class _FakeGitHubClient:
         self.pr = pr
         self.calls: list[int] = []
         self.inline_comments: list[dict[str, Any]] = []
-        self.resolved_thread_ids: list[str] = []
 
     def get_pr(self, pr_number: int) -> _FakePR:
         self.calls.append(pr_number)
@@ -194,10 +193,6 @@ class _FakeGitHubClient:
     ) -> None:
         assert pr is self.pr
         self.inline_comments.append(payload.to_request_payload(head_sha))
-
-    def resolve_review_thread(self, pr: _FakePR, thread_id: str) -> None:
-        assert pr is self.pr
-        self.resolved_thread_ids.append(thread_id)
 
 
 class _FakeCodexClient:
@@ -260,7 +255,6 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
                 "overall_explanation": "Needs one fix.",
                 "overall_confidence_score": 0.9,
                 "carried_forward": [],
-                "resolved_comment_ids": [],
                 "findings": [
                     {
                         "title": "Example finding",
@@ -335,8 +329,6 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
         current_findings_count=1,
         carried_forward_count=0,
         active_findings_count=1,
-        resolved_count=0,
-        resolution_failure_count=0,
     )
     assert [finding.as_dict() for finding in result.review.findings] == [
         {
@@ -369,7 +361,6 @@ def test_process_review_dry_run_skips_summary_comment(
                         "overall_explanation": "",
                         "overall_confidence_score": None,
                         "carried_forward": [],
-                        "resolved_comment_ids": [],
                         "findings": [],
                     }
                 )
@@ -452,7 +443,6 @@ def test_process_review_summary_counts_carried_forward_codex_comments(tmp_path: 
                                 "current_evidence": "value = 1",
                             }
                         ],
-                        "resolved_comment_ids": [],
                         "findings": [],
                     }
                 )
@@ -470,8 +460,6 @@ def test_process_review_summary_counts_carried_forward_codex_comments(tmp_path: 
         current_findings_count=0,
         carried_forward_count=1,
         active_findings_count=1,
-        resolved_count=0,
-        resolution_failure_count=0,
     )
     assert "- New findings this run: 0" in pr.as_issue().created_comments[0]
     assert (
@@ -481,7 +469,7 @@ def test_process_review_summary_counts_carried_forward_codex_comments(tmp_path: 
     assert render_review_summary_metadata("head-sha") in pr.as_issue().created_comments[0]
 
 
-def test_process_review_resolves_stale_prior_codex_thread(tmp_path: Path) -> None:
+def test_process_review_ignores_stale_prior_codex_thread(tmp_path: Path) -> None:
     (tmp_path / "src.py").write_text("value = 2\n", encoding="utf-8")
     pr = _FakePR(
         issue_comments=[
@@ -516,7 +504,6 @@ def test_process_review_resolves_stale_prior_codex_thread(tmp_path: Path) -> Non
                 "overall_explanation": "No active issues remain.",
                 "overall_confidence_score": 0.8,
                 "carried_forward": [],
-                "resolved_comment_ids": [],
                 "findings": [],
             }
         )
@@ -529,26 +516,17 @@ def test_process_review_resolves_stale_prior_codex_thread(tmp_path: Path) -> Non
 
     result = workflow.process_review(7)
 
-    assert result.review.resolved_comment_ids == ["comment-1"]
-    assert github_client.resolved_thread_ids == ["thread-1"]
-    assert (
-        "<prior_codex_review_comments_candidate_resolutions>"
-        in codex_client.calls[0]["schema_prompt"]
-    )
+    assert "<prior_codex_review_comments>" not in codex_client.calls[0]["schema_prompt"]
     assert result.summary == ReviewSummary(
         overall_correctness="patch is correct",
         current_findings_count=0,
         carried_forward_count=0,
         active_findings_count=0,
-        resolved_count=1,
-        resolution_failure_count=0,
     )
-    assert "- Prior Codex findings auto-resolved: 1" in pr.as_issue().created_comments[0]
+    assert "- Active findings total: 0" in pr.as_issue().created_comments[0]
 
 
-def test_process_review_dry_run_reports_ready_to_resolve_prior_codex_thread(
-    tmp_path: Path,
-) -> None:
+def test_process_review_dry_run_ignores_stale_prior_codex_thread(tmp_path: Path) -> None:
     (tmp_path / "src.py").write_text("value = 2\n", encoding="utf-8")
     pr = _FakePR(
         issue_comments=[
@@ -588,7 +566,6 @@ def test_process_review_dry_run_reports_ready_to_resolve_prior_codex_thread(
                         "overall_explanation": "",
                         "overall_confidence_score": 0.8,
                         "carried_forward": [],
-                        "resolved_comment_ids": [],
                         "findings": [],
                     }
                 )
@@ -596,12 +573,7 @@ def test_process_review_dry_run_reports_ready_to_resolve_prior_codex_thread(
         ),
     )
 
-    result = workflow.process_review(7)
-
-    assert result.review.resolved_comment_ids == ["comment-1"]
-    assert github_client.resolved_thread_ids == []
-    assert result.summary.resolved_count == 1
-    assert result.summary.resolution_failure_count == 0
+    workflow.process_review(7)
 
 
 def test_process_review_matches_github_bot_logins_across_issue_and_thread_apis(
@@ -663,7 +635,6 @@ def test_process_review_matches_github_bot_logins_across_issue_and_thread_apis(
                 "overall_explanation": "No active issues remain.",
                 "overall_confidence_score": 0.8,
                 "carried_forward": [],
-                "resolved_comment_ids": [],
                 "findings": [],
             }
         )
@@ -676,11 +647,10 @@ def test_process_review_matches_github_bot_logins_across_issue_and_thread_apis(
 
     result = workflow.process_review(7)
 
-    assert result.review.resolved_comment_ids == ["comment-1"]
-    assert github_client.resolved_thread_ids == ["thread-1"]
+    assert result.review.carried_forward_comment_ids == []
 
 
-def test_process_review_drops_invalid_resolved_comment_ids(tmp_path: Path) -> None:
+def test_process_review_drops_invalid_carried_forward_entries(tmp_path: Path) -> None:
     (tmp_path / "src.py").write_text("value = 1\n", encoding="utf-8")
     pr = _FakePR(
         issue_comments=[
@@ -724,8 +694,13 @@ def test_process_review_drops_invalid_resolved_comment_ids(tmp_path: Path) -> No
                                 "comment_id": "comment-1",
                                 "current_evidence": "value = 1",
                             }
+                        ]
+                        + [
+                            {
+                                "comment_id": "comment-unknown",
+                                "current_evidence": "value = 1",
+                            }
                         ],
-                        "resolved_comment_ids": ["comment-1", "comment-unknown", "comment-1"],
                         "findings": [],
                     }
                 )
@@ -736,13 +711,9 @@ def test_process_review_drops_invalid_resolved_comment_ids(tmp_path: Path) -> No
     result = workflow.process_review(7)
 
     assert result.review.carried_forward_comment_ids == ["comment-1"]
-    assert result.review.resolved_comment_ids == []
-    assert github_client.resolved_thread_ids == []
 
 
-def test_process_review_does_not_auto_resolve_stale_thread_when_new_finding_replaces_it(
-    tmp_path: Path,
-) -> None:
+def test_process_review_keeps_new_finding_when_stale_prior_thread_exists(tmp_path: Path) -> None:
     sample_file = tmp_path / "src.py"
     sample_file.write_text("value = 2\n", encoding="utf-8")
     pr = _FakePR(
@@ -783,7 +754,6 @@ def test_process_review_does_not_auto_resolve_stale_thread_when_new_finding_repl
                         "overall_explanation": "Issue still exists in updated form.",
                         "overall_confidence_score": 0.9,
                         "carried_forward": [],
-                        "resolved_comment_ids": [],
                         "findings": [
                             {
                                 "title": "Updated finding",
@@ -802,10 +772,7 @@ def test_process_review_does_not_auto_resolve_stale_thread_when_new_finding_repl
         ),
     )
 
-    result = workflow.process_review(7)
-
-    assert result.review.resolved_comment_ids == []
-    assert github_client.resolved_thread_ids == []
+    workflow.process_review(7)
 
 
 def test_process_review_warns_when_prior_summary_delete_fails(
@@ -831,7 +798,6 @@ def test_process_review_warns_when_prior_summary_delete_fails(
                         "overall_explanation": "",
                         "overall_confidence_score": None,
                         "carried_forward": [],
-                        "resolved_comment_ids": [],
                         "findings": [],
                     }
                 )
@@ -878,7 +844,6 @@ def test_process_review_resumes_prior_thread_with_inline_incremental_diff(
                 "overall_explanation": "",
                 "overall_confidence_score": None,
                 "carried_forward": [],
-                "resolved_comment_ids": [],
                 "findings": [],
             }
         )
@@ -893,6 +858,10 @@ def test_process_review_resumes_prior_thread_with_inline_incremental_diff(
         workflow.context_manager,
         "write_context_artifacts",
         lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.compose_prompt",
+        lambda *args, **kwargs: "FULL PR PROMPT",
     )
     monkeypatch.setattr(
         workflow,
@@ -927,6 +896,7 @@ def test_process_review_resumes_prior_thread_with_inline_incremental_diff(
     assert "<current_head_sha>head-sha</current_head_sha>" in codex_client.calls[0]["prompt"]
     assert "<incremental_diff>" in codex_client.calls[0]["prompt"]
     assert "+value = 2" in codex_client.calls[0]["prompt"]
+    assert "FULL PR PROMPT" not in codex_client.calls[0]["prompt"]
 
 
 def test_process_review_falls_back_to_fresh_review_when_prior_sha_is_not_ancestor(
@@ -947,7 +917,6 @@ def test_process_review_falls_back_to_fresh_review_when_prior_sha_is_not_ancesto
                 "overall_explanation": "",
                 "overall_confidence_score": None,
                 "carried_forward": [],
-                "resolved_comment_ids": [],
                 "findings": [],
             }
         )
@@ -1000,7 +969,7 @@ def test_process_review_raises_when_code_home_is_missing_after_cache_restore(
         workflow.process_review(7)
 
 
-def test_process_review_raises_when_cached_thread_lookup_fails(
+def test_process_review_falls_back_to_fresh_review_when_cached_thread_lookup_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1009,10 +978,21 @@ def test_process_review_raises_when_cached_thread_lookup_fails(
     )
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
+    codex_client = _FakeCodexClient(
+        json.dumps(
+            {
+                "overall_correctness": "patch is correct",
+                "overall_explanation": "",
+                "overall_confidence_score": None,
+                "carried_forward": [],
+                "findings": [],
+            }
+        )
+    )
     workflow = ReviewWorkflow(
         _make_config(tmp_path),
         github_client=cast(Any, _FakeGitHubClient(_FakePR(issue_comments=[prior_summary]))),
-        codex_client=cast(Any, _FakeCodexClient("{}")),
+        codex_client=cast(Any, codex_client),
     )
 
     monkeypatch.setattr("cli.workflows.review_workflow.git_is_ancestor", lambda older, newer: True)
@@ -1020,12 +1000,24 @@ def test_process_review_raises_when_cached_thread_lookup_fails(
         "cli.workflows.review_workflow.load_latest_thread_id",
         lambda codex_home, cwd: (_ for _ in ()).throw(ReviewResumeError("thread lookup failed")),
     )
+    monkeypatch.setattr(
+        workflow.context_manager,
+        "write_context_artifacts",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_post_results",
+        lambda *args, **kwargs: ReviewPostingOutcome.empty(0),
+    )
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CODEX_REVIEW_PREVIOUS_HEAD_SHA", "prev-sha")
     monkeypatch.setenv("CODEX_REVIEW_CACHE_HIT", "true")
 
-    with pytest.raises(ReviewResumeError, match="thread lookup failed"):
-        workflow.process_review(7)
+    workflow.process_review(7)
+
+    assert codex_client.calls[0]["resume_thread_id"] is None
+    assert "<review_resume_context>" not in codex_client.calls[0]["prompt"]
 
 
 def test_process_review_raises_when_resume_ancestry_check_fails(
@@ -1174,7 +1166,6 @@ def test_process_review_raises_domain_error_for_missing_head_sha(
                         "overall_explanation": "",
                         "overall_confidence_score": None,
                         "carried_forward": [],
-                        "resolved_comment_ids": [],
                         "findings": [],
                     }
                 )
@@ -1207,7 +1198,6 @@ def test_process_review_raises_domain_error_for_issue_comment_snapshot_failure(
                 "overall_explanation": "",
                 "overall_confidence_score": None,
                 "carried_forward": [],
-                "resolved_comment_ids": [],
                 "findings": [],
             }
         )
@@ -1245,7 +1235,6 @@ def test_process_review_wires_real_artifacts_and_inline_posting(tmp_path: Path) 
                 "overall_explanation": "Needs one focused fix.",
                 "overall_confidence_score": 0.8,
                 "carried_forward": [],
-                "resolved_comment_ids": [],
                 "findings": [
                     {
                         "title": "Example finding",
@@ -1323,7 +1312,6 @@ def test_process_review_renamed_file_posts_current_findings_without_prefilter(
                 "overall_explanation": "Needs one follow-up.",
                 "overall_confidence_score": 0.8,
                 "carried_forward": [],
-                "resolved_comment_ids": [],
                 "findings": [
                     {
                         "title": "New finding",
@@ -1418,7 +1406,6 @@ def test_process_review_ignores_non_codex_threads_in_rerun_context(tmp_path: Pat
                         "current_evidence": "old",
                     }
                 ],
-                "resolved_comment_ids": [],
                 "findings": [
                     {
                         "title": "🔴 [P1] Existing finding",
@@ -1501,7 +1488,6 @@ def test_process_review_drops_invalid_carried_forward_comment_ids(tmp_path: Path
                                 "current_evidence": "value = 1",
                             },
                         ],
-                        "resolved_comment_ids": [],
                         "findings": [],
                     }
                 )

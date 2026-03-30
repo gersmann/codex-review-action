@@ -243,7 +243,6 @@ def test_model_helpers_parse_and_normalize_payloads() -> None:
             "overall_explanation": "fine",
             "overall_confidence_score": 0.75,
             "carried_forward": [],
-            "resolved_comment_ids": [],
             "findings": [
                 {
                     "title": "a",
@@ -263,7 +262,6 @@ def test_model_helpers_parse_and_normalize_payloads() -> None:
         "overall_explanation": "fine",
         "overall_confidence_score": 0.75,
         "carried_forward": [],
-        "resolved_comment_ids": [],
         "findings": [
             {
                 "title": "a",
@@ -285,7 +283,6 @@ def test_model_helpers_parse_and_normalize_payloads() -> None:
                 "overall_explanation": "fine",
                 "overall_confidence_score": 0.75,
                 "carried_forward": [],
-                "resolved_comment_ids": [],
                 "findings": [
                     {
                         "title": "a",
@@ -541,9 +538,6 @@ def test_review_dedupe_helpers(tmp_path: Path) -> None:
             '{"id": "comment-1", "thread_id": "thread-1", "path": "renamed.py", "line": 11, "current_code": "value = 1", "body": "**Current code:**\\n```python\\nvalue = 1\\n```\\n\\n**Problem:** still broken.\\n\\n**Fix:**\\n```python\\nvalue = 1\\n```\\n\\n---"}',
             '{"id": "comment-5", "thread_id": "thread-5", "path": "renamed.py", "line": 9, "current_code": "value = 1", "body": "**Current code:**\\n```python\\nvalue = 1\\n```\\n\\n**Problem:** still broken.\\n\\n**Fix:**\\n```python\\nvalue = 1\\n```\\n\\n---"}',
             "</prior_codex_review_comments>",
-            "<prior_codex_review_comments_candidate_resolutions>",
-            '{"id": "comment-3", "thread_id": "thread-3", "path": "renamed.py", "line": 5, "current_code": "value = 2", "body": "**Current code:**\\n```python\\nvalue = 2\\n```\\n\\n**Problem:** stale.\\n\\n**Fix:**\\n```python\\nvalue = 2\\n```\\n\\n---"}',
-            "</prior_codex_review_comments_candidate_resolutions>",
         ]
     )
 
@@ -677,8 +671,6 @@ def test_github_client_helpers_cover_normalization_and_replies(
     client = GitHubClient(ReviewConfig(github_token="t", repository="o/r"))
     client.reply_to_review_comment(cast(Any, pr), 12, "reply body")
     assert pr._requester.calls[0][1].endswith("/comments/12/replies")
-    client.resolve_review_thread(cast(Any, pr), "thread-123")
-    assert pr._requester.calls[1][0] == "GRAPHQL"
 
     def _boom_request(*args: object, **kwargs: object) -> None:
         raise RuntimeError("boom")
@@ -686,17 +678,6 @@ def test_github_client_helpers_cover_normalization_and_replies(
     monkeypatch.setattr(client, "_post_pr_resource", _boom_request)
     with pytest.raises(Exception, match="failed replying to review comment 1"):
         client.reply_to_review_comment(cast(Any, _FakePR()), 1, "text")
-
-    class _BrokenRequester(_FakeRequester):
-        def graphql_query(
-            self, query: str, variables: dict[str, Any]
-        ) -> tuple[dict[str, Any], dict[str, Any]]:
-            raise RuntimeError("boom")
-
-    broken_pr = _FakePR()
-    broken_pr._requester = _BrokenRequester()
-    with pytest.raises(Exception, match="failed resolving review thread thread-1"):
-        client.resolve_review_thread(cast(Any, broken_pr), "thread-1")
 
     class _BrokenIssue(_FakeIssue):
         def create_comment(self, text: str) -> None:  # noqa: ARG002

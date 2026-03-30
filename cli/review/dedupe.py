@@ -91,9 +91,6 @@ def render_prior_codex_comments_for_prompt(
     applicable_comments = [
         comment for comment in existing_comments if comment.is_currently_applicable
     ]
-    resolved_candidates = [
-        comment for comment in existing_comments if not comment.is_currently_applicable
-    ]
     lines: list[str] = []
     if applicable_comments:
         lines.append("<prior_codex_review_comments>")
@@ -112,23 +109,6 @@ def render_prior_codex_comments_for_prompt(
                 )
             )
         lines.append("</prior_codex_review_comments>")
-    if resolved_candidates:
-        lines.append("<prior_codex_review_comments_candidate_resolutions>")
-        for comment in resolved_candidates[:200]:
-            lines.append(
-                json.dumps(
-                    {
-                        "id": comment.id,
-                        "thread_id": comment.thread_id,
-                        "path": comment.path,
-                        "line": comment.line,
-                        "current_code": comment.current_code,
-                        "body": comment.body,
-                    },
-                    ensure_ascii=True,
-                )
-            )
-        lines.append("</prior_codex_review_comments_candidate_resolutions>")
     return "\n".join(lines)
 
 

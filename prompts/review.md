@@ -111,9 +111,6 @@ OUTPUT FORMAT:
       "current_evidence": "<exact current-code snippet copied verbatim>"
     }
   ],
-  "resolved_comment_ids": [
-    "<prior review comment id that now looks fixed>"
-  ],
   "overall_correctness": "patch is correct" | "patch is incorrect",
   "overall_explanation": "<1-3 sentence explanation justifying the overall_correctness verdict>",
   "overall_confidence_score": <float 0.0-1.0>
@@ -122,7 +119,6 @@ OUTPUT FORMAT:
 
 * **Do not** wrap the JSON in markdown fences or extra prose.
 * `carried_forward` must be an array. Use `[]` when there are no prior Codex comments to carry forward.
-* `resolved_comment_ids` must be an array. Use `[]` when there are no prior Codex comments that should be marked resolved.
 * The code_location field is required and must include absolute_file_path and line_range.
 *Line ranges must be as short as possible for interpreting the issue (avoid ranges over 5–10 lines; pick the most suitable subrange).
 * The code_location should overlap with the diff.
