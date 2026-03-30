@@ -466,6 +466,12 @@ def test_process_review_summary_counts_carried_forward_codex_comments(tmp_path: 
         "- Prior unresolved Codex findings still relevant: 1" in pr.as_issue().created_comments[0]
     )
     assert "- Active findings total: 1" in pr.as_issue().created_comments[0]
+    assert (
+        "No new actionable bugs were found in the current changes, but 1 prior unresolved "
+        "Codex finding still applies, so the patch remains incorrect."
+        in pr.as_issue().created_comments[0]
+    )
+    assert "No additional non-redundant findings." not in pr.as_issue().created_comments[0]
     assert render_review_summary_metadata("head-sha") in pr.as_issue().created_comments[0]
 
 

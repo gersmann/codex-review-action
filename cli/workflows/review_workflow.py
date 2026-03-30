@@ -105,21 +105,52 @@ def _build_review_summary(
     if posting_outcome.post_result.dry_run:
         summary_lines.append(f"- Inline comments ready: {posting_outcome.publishable_count}")
 
-    overall_explanation = review.overall_explanation.strip()
+    overall_explanation = _build_summary_explanation(review, summary)
     if overall_explanation:
         summary_lines.append("")
         summary_lines.append(overall_explanation)
-    if summary.carried_forward_count > 0:
-        noun = "finding" if summary.carried_forward_count == 1 else "findings"
-        verb = "was" if summary.carried_forward_count == 1 else "were"
-        summary_lines.append("")
-        summary_lines.append(
-            f"{summary.carried_forward_count} prior unresolved Codex {noun} "
-            f"{verb} re-adjudicated as still relevant."
-        )
     summary_lines.append("")
     summary_lines.append(SUMMARY_TIP)
     return "\n".join(summary_lines)
+
+
+def _build_summary_explanation(
+    review: ReviewRunResult,
+    summary: ReviewSummary,
+) -> str:
+    overall_explanation = review.overall_explanation.strip()
+    current_findings_count = summary.current_findings_count
+    carried_forward_count = summary.carried_forward_count
+    active_findings_count = summary.active_findings_count
+    if active_findings_count == 0:
+        return overall_explanation or "No actionable bugs remain in the current review state."
+    if current_findings_count == 0 and carried_forward_count > 0:
+        finding_noun = "finding" if carried_forward_count == 1 else "findings"
+        verb = "applies" if carried_forward_count == 1 else "apply"
+        return (
+            "No new actionable bugs were found in the current changes, but "
+            f"{carried_forward_count} prior unresolved Codex {finding_noun} still {verb}, "
+            "so the patch remains incorrect."
+        )
+    if current_findings_count > 0 and carried_forward_count == 0:
+        bug_noun = "bug" if current_findings_count == 1 else "bugs"
+        verb = "was" if current_findings_count == 1 else "were"
+        return overall_explanation or (
+            f"{current_findings_count} actionable {bug_noun} {verb} found in the current "
+            "changes, so the patch remains incorrect."
+        )
+    new_noun = "finding" if current_findings_count == 1 else "findings"
+    prior_noun = "finding" if carried_forward_count == 1 else "findings"
+    new_verb = "was" if current_findings_count == 1 else "were"
+    prior_verb = "applies" if carried_forward_count == 1 else "apply"
+    aggregate_summary = (
+        f"{current_findings_count} new actionable {new_noun} {new_verb} identified in the current "
+        f"changes, and {carried_forward_count} prior unresolved Codex {prior_noun} still {prior_verb}, "
+        "so the patch remains incorrect."
+    )
+    if not overall_explanation:
+        return aggregate_summary
+    return f"{aggregate_summary}\n\n{overall_explanation}"
 
 
 class ReviewWorkflow:
