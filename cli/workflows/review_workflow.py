@@ -45,7 +45,11 @@ from ..review.resume_state import (
     parse_reviewed_head_sha,
     render_review_summary_metadata,
 )
-from ..review.review_prompt import compose_prompt, load_guidelines
+from ..review.review_prompt import (
+    compose_prompt,
+    load_guidelines,
+    render_additional_review_instructions,
+)
 
 SUMMARY_TIP = (
     'Tip: comment with "/codex address comments" to attempt automated fixes for unresolved '
@@ -555,6 +559,7 @@ class ReviewWorkflow:
         prompt_sections = [base_instructions]
         if resume_block:
             prompt_sections.append(resume_block)
+            prompt_sections.append(render_additional_review_instructions(self.config))
         else:
             prompt_sections.append(raw_prompt)
         prompt = "\n\n".join(section for section in prompt_sections if section)

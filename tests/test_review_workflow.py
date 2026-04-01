@@ -270,8 +270,10 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
             }
         )
     )
+    config = _make_config(tmp_path)
+    config.additional_prompt = "Review only security and correctness issues."
     workflow = ReviewWorkflow(
-        _make_config(tmp_path),
+        config,
         github_client=cast(Any, github_client),
         codex_client=cast(Any, codex_client),
     )
@@ -514,8 +516,10 @@ def test_process_review_ignores_stale_prior_codex_thread(tmp_path: Path) -> None
             }
         )
     )
+    config = _make_config(tmp_path)
+    config.additional_prompt = "Review only security and correctness issues."
     workflow = ReviewWorkflow(
-        _make_config(tmp_path),
+        config,
         github_client=cast(Any, github_client),
         codex_client=cast(Any, codex_client),
     )
@@ -645,8 +649,10 @@ def test_process_review_matches_github_bot_logins_across_issue_and_thread_apis(
             }
         )
     )
+    config = _make_config(tmp_path)
+    config.additional_prompt = "Review only security and correctness issues."
     workflow = ReviewWorkflow(
-        _make_config(tmp_path),
+        config,
         github_client=cast(Any, github_client),
         codex_client=cast(Any, codex_client),
     )
@@ -854,8 +860,10 @@ def test_process_review_resumes_prior_thread_with_inline_incremental_diff(
             }
         )
     )
+    config = _make_config(tmp_path)
+    config.additional_prompt = "Review only security and correctness issues."
     workflow = ReviewWorkflow(
-        _make_config(tmp_path),
+        config,
         github_client=cast(Any, github_client),
         codex_client=cast(Any, codex_client),
     )
@@ -902,6 +910,7 @@ def test_process_review_resumes_prior_thread_with_inline_incremental_diff(
     assert "<current_head_sha>head-sha</current_head_sha>" in codex_client.calls[0]["prompt"]
     assert "<incremental_diff>" in codex_client.calls[0]["prompt"]
     assert "+value = 2" in codex_client.calls[0]["prompt"]
+    assert "Review only security and correctness issues." in codex_client.calls[0]["prompt"]
     assert "FULL PR PROMPT" not in codex_client.calls[0]["prompt"]
 
 
