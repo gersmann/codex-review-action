@@ -433,7 +433,9 @@ class CodexClient:
         normalized = codex_home.strip()
         if not normalized:
             return None
-        return {"CODEX_HOME": normalized}
+        process_env = dict(os.environ)
+        process_env["CODEX_HOME"] = normalized
+        return process_env
 
     def _resolved_model_name(self, model_name: str | None) -> str:
         resolved_model_name = model_name if model_name is not None else self.config.model_name

@@ -526,6 +526,7 @@ def test_execute_structured_resumes_existing_thread(
         ]
     )
     monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     client = CodexClient(_make_config())
 
@@ -538,7 +539,9 @@ def test_execute_structured_resumes_existing_thread(
     assert output == '{"summary":"ok"}'
     assert _FakeCodex.last_resume_thread_id == "thread-123"
     assert _FakeCodex.last_resume_options is not None
-    assert _FakeCodex.last_options.env == {"CODEX_HOME": os.environ["CODEX_HOME"]}
+    assert _FakeCodex.last_options.env is not None
+    assert _FakeCodex.last_options.env["CODEX_HOME"] == os.environ["CODEX_HOME"]
+    assert _FakeCodex.last_options.env["PATH"] == "/usr/bin:/bin"
 
 
 def test_execute_structured_falls_back_to_fresh_thread_when_resume_fails(

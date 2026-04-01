@@ -7,6 +7,7 @@ import pytest
 
 from cli.core.exceptions import ReviewResumeError
 from cli.review.resume_state import (
+    _app_server_process_env,
     build_review_resume_outputs,
     compute_review_cache_key,
     extract_current_head_sha,
@@ -60,6 +61,15 @@ def test_build_review_resume_outputs_uses_previous_sha_for_restore_key(tmp_path:
         "restore_key": "codex-review-v1-owner-repo-pr-17-gpt-5.4-oldsha",
         "current_cache_key": "codex-review-v1-owner-repo-pr-17-gpt-5.4-newsha",
     }
+
+
+def test_app_server_process_env_preserves_existing_path(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    env = _app_server_process_env(tmp_path / "codex-home")
+
+    assert env["CODEX_HOME"] == str(tmp_path / "codex-home")
+    assert env["PATH"] == "/usr/bin:/bin"
 
 
 def test_load_latest_thread_id_uses_most_recent_updated_at(

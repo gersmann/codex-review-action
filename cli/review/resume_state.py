@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -134,7 +135,7 @@ def _list_stored_threads(*, codex_home: Path, cwd: Path) -> list[protocol.Thread
         AppServerThreadListOptions,
     )
 
-    process_options = AppServerProcessOptions(env={"CODEX_HOME": str(codex_home)})
+    process_options = AppServerProcessOptions(env=_app_server_process_env(codex_home))
     list_options = AppServerThreadListOptions(cwd=str(cwd.resolve()))
     all_threads: list[protocol.Thread] = []
 
@@ -159,6 +160,12 @@ def _next_cursor(page: ThreadListResult) -> str | None:
         return None
     normalized = next_cursor.strip()
     return normalized or None
+
+
+def _app_server_process_env(codex_home: Path) -> dict[str, str]:
+    process_env = dict(os.environ)
+    process_env["CODEX_HOME"] = str(codex_home)
+    return process_env
 
 
 def _sanitize_cache_component(value: str) -> str:
