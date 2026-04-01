@@ -299,11 +299,14 @@ def _run_mode_workflow(config: ReviewConfig) -> int:
 
     summary = result.summary
     if summary.carried_forward_count > 0:
+        extra_parts: list[str] = []
+        if summary.carried_forward_count > 0:
+            extra_parts.append(f"{summary.carried_forward_count} prior findings still relevant")
         print(
             "\nReview completed: "
             f"{summary.overall_correctness}, "
             f"{summary.current_findings_count} new findings, "
-            f"{summary.carried_forward_count} prior findings still relevant "
+            f"{', '.join(extra_parts)} "
             f"({summary.active_findings_count} active total)"
         )
     else:

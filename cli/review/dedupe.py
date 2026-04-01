@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ..core.github_types import IssueCommentLikeProtocol, ReviewLikeProtocol
-from ..core.models import ExistingReviewComment, ReviewThreadSnapshot
+from ..core.models import PriorCodexReviewComment, ReviewThreadSnapshot
 
 SUMMARY_MARKER = "Codex Autonomous Review:"
 _CURRENT_CODE_BLOCK_RE = re.compile(r"\*\*Current code:\*\*\s*```[^\n]*\n(.*?)```", re.DOTALL)
@@ -36,7 +36,7 @@ def collect_codex_author_logins(
             continue
         author_login = issue_comment.user.login
         if isinstance(author_login, str) and author_login:
-            author_logins.add(author_login)
+            author_logins.add(_normalize_author_login(author_login))
     return author_logins
 
 
@@ -44,8 +44,8 @@ def collect_prior_codex_review_comments(
     review_threads: Sequence[ReviewThreadSnapshot],
     codex_author_logins: set[str],
     repo_root: Path,
-) -> list[ExistingReviewComment]:
-    items: list[ExistingReviewComment] = []
+) -> list[PriorCodexReviewComment]:
+    items: list[PriorCodexReviewComment] = []
     if not codex_author_logins:
         return items
 
@@ -56,23 +56,26 @@ def collect_prior_codex_review_comments(
 
         first_comment = review_thread.comments[0]
         prompt_line = first_comment.prompt_line
-        if first_comment.author not in codex_author_logins:
+        if _normalize_author_login(first_comment.author) not in codex_author_logins:
             continue
         if not first_comment.body or not first_comment.path or not isinstance(prompt_line, int):
             continue
         current_code = _extract_current_code_block(first_comment.body)
         if current_code is None:
             continue
-        if not _current_code_matches_file(resolved_repo_root, first_comment.path, current_code):
-            continue
-
         items.append(
-            ExistingReviewComment(
+            PriorCodexReviewComment(
                 id=first_comment.id,
+                thread_id=review_thread.id,
                 path=first_comment.path,
                 line=prompt_line,
                 body=first_comment.body,
                 current_code=current_code,
+                is_currently_applicable=_current_code_matches_file(
+                    resolved_repo_root,
+                    first_comment.path,
+                    current_code,
+                ),
             )
         )
 
@@ -80,26 +83,32 @@ def collect_prior_codex_review_comments(
 
 
 def render_prior_codex_comments_for_prompt(
-    existing_comments: Sequence[ExistingReviewComment],
+    existing_comments: Sequence[PriorCodexReviewComment],
 ) -> str:
     if not existing_comments:
         return ""
 
-    lines = ["<prior_codex_review_comments>"]
-    for comment in existing_comments[:200]:
-        lines.append(
-            json.dumps(
-                {
-                    "id": comment.id,
-                    "path": comment.path,
-                    "line": comment.line,
-                    "current_code": comment.current_code,
-                    "body": comment.body,
-                },
-                ensure_ascii=True,
+    applicable_comments = [
+        comment for comment in existing_comments if comment.is_currently_applicable
+    ]
+    lines: list[str] = []
+    if applicable_comments:
+        lines.append("<prior_codex_review_comments>")
+        for comment in applicable_comments[:200]:
+            lines.append(
+                json.dumps(
+                    {
+                        "id": comment.id,
+                        "thread_id": comment.thread_id,
+                        "path": comment.path,
+                        "line": comment.line,
+                        "current_code": comment.current_code,
+                        "body": comment.body,
+                    },
+                    ensure_ascii=True,
+                )
             )
-        )
-    lines.append("</prior_codex_review_comments>")
+        lines.append("</prior_codex_review_comments>")
     return "\n".join(lines)
 
 
@@ -134,3 +143,10 @@ def _resolve_repo_file(repo_root: Path, relative_path: str) -> Path | None:
     if not repo_file.is_file():
         return None
     return repo_file
+
+
+def _normalize_author_login(author_login: str) -> str:
+    normalized = author_login.strip()
+    if normalized.endswith("[bot]"):
+        return normalized[:-5]
+    return normalized

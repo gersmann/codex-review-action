@@ -13,9 +13,9 @@ from cli.core.filesystem import write_text_atomic
 from cli.core.github_types import IssueCommentLikeProtocol, ReviewCommentLikeProtocol
 from cli.core.models import (
     CommentContext,
-    ExistingReviewComment,
     FindingLocation,
     InlineCommentPayload,
+    PriorCodexReviewComment,
     ReviewFinding,
     ReviewRunResult,
     ReviewThreadComment,
@@ -107,6 +107,12 @@ class _FakeRequester:
     ) -> dict[str, Any]:
         self.calls.append((method, url, input))
         return {}
+
+    def graphql_query(
+        self, query: str, variables: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        self.calls.append(("GRAPHQL", query, variables))
+        return {}, {"data": {"resolveReviewThread": {"thread": {"id": variables["threadId"]}}}}
 
 
 class _FakeIssue:
@@ -400,10 +406,11 @@ def test_review_dedupe_helpers(tmp_path: Path) -> None:
         list[IssueCommentLikeProtocol],
         [
             _FakeIssueComment(f"{SUMMARY_MARKER}\nold summary", login="bot"),
+            _FakeIssueComment(f"{SUMMARY_MARKER}\nold summary", login="github-actions[bot]"),
             _FakeIssueComment("human note", login="alice"),
         ],
     )
-    assert collect_codex_author_logins(issue_comments) == {"bot"}
+    assert collect_codex_author_logins(issue_comments) == {"bot", "github-actions"}
 
     (tmp_path / "renamed.py").write_text("value = 1\n", encoding="utf-8")
     structured_body = (
@@ -461,6 +468,20 @@ def test_review_dedupe_helpers(tmp_path: Path) -> None:
                 ],
             ),
             ReviewThreadSnapshot(
+                id="thread-5",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-5",
+                        body=structured_body,
+                        path="renamed.py",
+                        line=9,
+                        original_line=9,
+                        author="github-actions",
+                    )
+                ],
+            ),
+            ReviewThreadSnapshot(
                 id="thread-4",
                 is_resolved=True,
                 comments=[
@@ -475,22 +496,47 @@ def test_review_dedupe_helpers(tmp_path: Path) -> None:
                 ],
             ),
         ],
-        {"bot"},
+        {"bot", "github-actions"},
         tmp_path,
     )
     assert prior_codex_comments == [
-        ExistingReviewComment(
+        PriorCodexReviewComment(
             id="comment-1",
+            thread_id="thread-1",
             path="renamed.py",
             line=11,
             body=structured_body,
             current_code="value = 1",
+            is_currently_applicable=True,
+        ),
+        PriorCodexReviewComment(
+            id="comment-3",
+            thread_id="thread-3",
+            path="renamed.py",
+            line=5,
+            body=(
+                "**Current code:**\n```python\nvalue = 2\n```\n\n"
+                "**Problem:** stale.\n\n"
+                "**Fix:**\n```python\nvalue = 2\n```\n\n---"
+            ),
+            current_code="value = 2",
+            is_currently_applicable=False,
+        ),
+        PriorCodexReviewComment(
+            id="comment-5",
+            thread_id="thread-5",
+            path="renamed.py",
+            line=9,
+            body=structured_body,
+            current_code="value = 1",
+            is_currently_applicable=True,
         ),
     ]
     assert render_prior_codex_comments_for_prompt(prior_codex_comments) == "\n".join(
         [
             "<prior_codex_review_comments>",
-            '{"id": "comment-1", "path": "renamed.py", "line": 11, "current_code": "value = 1", "body": "**Current code:**\\n```python\\nvalue = 1\\n```\\n\\n**Problem:** still broken.\\n\\n**Fix:**\\n```python\\nvalue = 1\\n```\\n\\n---"}',
+            '{"id": "comment-1", "thread_id": "thread-1", "path": "renamed.py", "line": 11, "current_code": "value = 1", "body": "**Current code:**\\n```python\\nvalue = 1\\n```\\n\\n**Problem:** still broken.\\n\\n**Fix:**\\n```python\\nvalue = 1\\n```\\n\\n---"}',
+            '{"id": "comment-5", "thread_id": "thread-5", "path": "renamed.py", "line": 9, "current_code": "value = 1", "body": "**Current code:**\\n```python\\nvalue = 1\\n```\\n\\n**Problem:** still broken.\\n\\n**Fix:**\\n```python\\nvalue = 1\\n```\\n\\n---"}',
             "</prior_codex_review_comments>",
         ]
     )
@@ -699,6 +745,19 @@ def test_main_helpers_cover_commands_and_event_loading(
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(bad_event))
     with pytest.raises(Exception, match="expected object"):
         load_github_event()
+
+
+def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> None:
+    action_yaml = Path("action.yml").read_text(encoding="utf-8")
+    workflow_yaml = Path(".github/workflows/codex-review.yml").read_text(encoding="utf-8")
+
+    assert (
+        "steps.review_codex_cache.outputs.cache-hit == 'true' && "
+        "steps.review_resume_state.outputs.restore_key == "
+        "steps.review_resume_state.outputs.current_cache_key"
+    ) in action_yaml
+    assert "model: gpt-5.4" in workflow_yaml
+    assert "model: gpt-5.1-codex-max" not in workflow_yaml
 
 
 def test_edit_workflow_helpers_cover_reply_formatting_and_context_normalization() -> None:

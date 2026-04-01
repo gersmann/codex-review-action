@@ -165,14 +165,16 @@ class ReviewFinding:
 
 
 @dataclass(frozen=True)
-class ExistingReviewComment:
-    """Structured inline review comment used for local dedupe."""
+class PriorCodexReviewComment:
+    """Unresolved Codex-authored review thread comment reused on reruns."""
 
     id: str
+    thread_id: str
     path: str
     line: int
     body: str
     current_code: str
+    is_currently_applicable: bool
 
 
 @dataclass(frozen=True)

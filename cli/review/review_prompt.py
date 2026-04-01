@@ -76,20 +76,22 @@ def compose_prompt(
         "</git_review_instructions>\n"
     ).format(review_comments_rel=review_comments_rel)
 
-    extra = config.additional_prompt
-    extra_instructions = (
-        "<additional_instructions>\n" + extra + "\n</additional_instructions>\n" if extra else ""
-    )
-
     return (
         f"{context}"
         f"{context_artifacts}"
         f"{changed_summary}"
         f"{review_instructions}"
         f"{line_rules}"
-        f"{extra_instructions}"
+        f"{render_additional_review_instructions(config)}"
         "<response_format>Respond now with the JSON schema output only.</response_format>"
     )
+
+
+def render_additional_review_instructions(config: ReviewConfig) -> str:
+    extra = config.additional_prompt
+    if not extra:
+        return ""
+    return "<additional_instructions>\n" + extra + "\n</additional_instructions>\n"
 
 
 def _build_changed_summary(changed_files: Sequence[ChangedFileProtocol]) -> str:

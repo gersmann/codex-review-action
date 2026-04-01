@@ -7,7 +7,10 @@ from cli import main as main_module
 from cli.core.exceptions import CodexReviewError
 from cli.core.models import CommentContext, ReviewRunResult
 from cli.review.posting import ReviewPostingOutcome
-from cli.workflows.review_workflow import ReviewSummary, ReviewWorkflowResult
+from cli.workflows.review_workflow import (
+    ReviewSummary,
+    ReviewWorkflowResult,
+)
 
 
 def _make_review_result(
@@ -395,6 +398,35 @@ def test_main_reports_carried_forward_findings_separately(monkeypatch, capsys) -
         "Review completed: patch is incorrect, 1 new findings, "
         "2 prior findings still relevant (3 active total)"
     ) in capsys.readouterr().out
+
+
+def test_main_reports_clean_summary_without_resolution_counts(monkeypatch, capsys) -> None:
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    class _Workflow:
+        def __init__(self, config):
+            assert config.mode == "review"
+            assert config.pr_number == 17
+
+        def process_review(self, pr_number: int) -> ReviewWorkflowResult:
+            assert pr_number == 17
+            return _make_review_result(findings_count=0)
+
+    monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
+    monkeypatch.setattr(main_module, "EditWorkflow", object)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["codex-review", "--repo", "owner/repo", "--pr", "17", "--mode", "review"],
+    )
+
+    rc = main_module.main()
+
+    assert rc == 0
+    assert "Review completed: patch is correct, 0 findings" in capsys.readouterr().out
 
 
 def test_main_returns_one_for_review_workflow_errors(monkeypatch, capsys) -> None:

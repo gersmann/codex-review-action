@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -58,6 +60,9 @@ class _FakeThread:
 class _FakeCodex:
     last_options: Any = None
     last_thread_options: Any = None
+    last_resume_options: Any = None
+    last_resume_thread_id: str | None = None
+    resume_error: Exception | None = None
     thread: _FakeThread
 
     def __init__(self, options: Any) -> None:
@@ -65,6 +70,13 @@ class _FakeCodex:
 
     def start_thread(self, options: Any) -> _FakeThread:
         _FakeCodex.last_thread_options = options
+        return _FakeCodex.thread
+
+    def resume_thread(self, thread_id: str, options: Any) -> _FakeThread:
+        _FakeCodex.last_resume_thread_id = thread_id
+        _FakeCodex.last_resume_options = options
+        if _FakeCodex.resume_error is not None:
+            raise _FakeCodex.resume_error
         return _FakeCodex.thread
 
 
@@ -77,6 +89,14 @@ def _make_config(*, debug_level: int = 0, stream_output: bool = False) -> Review
         stream_output=stream_output,
         debug_level=debug_level,
     )
+
+
+def _reset_fake_codex() -> None:
+    _FakeCodex.last_options = None
+    _FakeCodex.last_thread_options = None
+    _FakeCodex.last_resume_options = None
+    _FakeCodex.last_resume_thread_id = None
+    _FakeCodex.resume_error = None
 
 
 def _agent_message_delta(delta: str) -> protocol.ItemAgentMessageDeltaNotification:
@@ -257,6 +277,7 @@ def _root_value(value: object) -> object:
 def test_execute_text_streams_agent_message_from_protocol_deltas(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _reset_fake_codex()
     _FakeCodex.thread = _FakeThread(
         [
             _FakeStream(
@@ -290,6 +311,7 @@ def test_execute_text_does_not_duplicate_streamed_output_when_completion_arrives
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    _reset_fake_codex()
     _FakeCodex.thread = _FakeThread(
         [
             _FakeStream(
@@ -318,6 +340,7 @@ def test_execute_text_does_not_duplicate_streamed_output_when_completion_arrives
 def test_execute_text_enables_raw_reasoning_at_debug2(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _reset_fake_codex()
     _FakeCodex.thread = _FakeThread([_FakeStream(iter([_turn_completed()]), final_text="ok")])
     monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
     client = CodexClient(_make_config(debug_level=2))
@@ -329,6 +352,7 @@ def test_execute_text_enables_raw_reasoning_at_debug2(
 
 
 def test_execute_text_raises_on_thread_run_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _reset_fake_codex()
     _FakeCodex.thread = _FakeThread([_FakeStream(iter(()), wait_error=ThreadRunError("boom"))])
     monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
     client = CodexClient(_make_config())
@@ -340,6 +364,7 @@ def test_execute_text_raises_on_thread_run_error(monkeypatch: pytest.MonkeyPatch
 def test_execute_text_raises_on_failed_turn_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _reset_fake_codex()
     _FakeCodex.thread = _FakeThread([_FakeStream(iter([_turn_completed("failed", "bad")]))])
     monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
     client = CodexClient(_make_config())
@@ -351,6 +376,7 @@ def test_execute_text_raises_on_failed_turn_event(
 def test_execute_text_raises_on_interrupted_turn_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _reset_fake_codex()
     _FakeCodex.thread = _FakeThread([_FakeStream(iter([_turn_completed("interrupted")]))])
     monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
     client = CodexClient(_make_config())
@@ -368,6 +394,7 @@ class _ParseErrorIterator:
 
 
 def test_execute_text_raises_on_parse_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    _reset_fake_codex()
     _FakeCodex.thread = _FakeThread([_FakeStream(_ParseErrorIterator())])
     monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
     client = CodexClient(_make_config())
@@ -379,6 +406,7 @@ def test_execute_text_raises_on_parse_errors(monkeypatch: pytest.MonkeyPatch) ->
 def test_execute_structured_runs_second_turn_with_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _reset_fake_codex()
     schema = {
         "type": "object",
         "properties": {"summary": {"type": "string"}},
@@ -416,6 +444,7 @@ def test_execute_structured_runs_second_turn_with_schema(
 def test_execute_structured_raises_when_schema_turn_emits_no_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _reset_fake_codex()
     schema = {
         "type": "object",
         "properties": {"summary": {"type": "string"}},
@@ -445,6 +474,7 @@ def test_execute_structured_raises_when_schema_turn_emits_no_output(
 def test_execute_text_falls_back_to_medium_reasoning_effort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _reset_fake_codex()
     _FakeCodex.thread = _FakeThread([_FakeStream(iter([_turn_completed()]), final_text="ok")])
     monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
     client = CodexClient(_make_config())
@@ -460,6 +490,7 @@ def test_execute_text_falls_back_to_medium_reasoning_effort(
 def test_execute_text_uses_config_api_key_not_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _reset_fake_codex()
     _FakeCodex.thread = _FakeThread([_FakeStream(iter([_turn_completed()]), final_text="ok")])
     monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
     monkeypatch.setenv("OPENAI_API_KEY", "env-key")
@@ -475,6 +506,70 @@ def test_execute_text_uses_config_api_key_not_environment(
 
     assert output == "ok"
     assert _FakeCodex.last_options.api_key == "config-key"
+
+
+def test_execute_structured_resumes_existing_thread(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _reset_fake_codex()
+    schema = {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+        "additionalProperties": False,
+    }
+    _FakeCodex.thread = _FakeThread(
+        [
+            _FakeStream(iter([_turn_completed()]), final_text="Intermediate"),
+            _FakeStream(iter([_turn_completed()]), final_text='{"summary":"ok"}'),
+        ]
+    )
+    monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    client = CodexClient(_make_config())
+
+    output = client.execute_structured(
+        "prompt",
+        output_schema=schema,
+        resume_thread_id="thread-123",
+    )
+
+    assert output == '{"summary":"ok"}'
+    assert _FakeCodex.last_resume_thread_id == "thread-123"
+    assert _FakeCodex.last_resume_options is not None
+    assert _FakeCodex.last_options.env == {"CODEX_HOME": os.environ["CODEX_HOME"]}
+
+
+def test_execute_structured_falls_back_to_fresh_thread_when_resume_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_fake_codex()
+    schema = {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+        "additionalProperties": False,
+    }
+    _FakeCodex.thread = _FakeThread(
+        [
+            _FakeStream(iter([_turn_completed()]), final_text="Intermediate"),
+            _FakeStream(iter([_turn_completed()]), final_text='{"summary":"ok"}'),
+        ]
+    )
+    _FakeCodex.resume_error = RuntimeError("missing cached thread")
+    monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
+    client = CodexClient(_make_config())
+
+    output = client.execute_structured(
+        "prompt",
+        output_schema=schema,
+        resume_thread_id="thread-123",
+    )
+
+    assert output == '{"summary":"ok"}'
+    assert _FakeCodex.last_resume_thread_id == "thread-123"
+    assert _FakeCodex.last_thread_options is not None
 
 
 def test_debug_level1_logs_token_usage_update_summary(
