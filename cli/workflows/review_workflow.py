@@ -239,10 +239,12 @@ class ReviewWorkflow:
         try:
             is_ancestor = git_is_ancestor(previous_reviewed_sha, head_sha)
         except subprocess.CalledProcessError as exc:
-            raise ReviewResumeError(
+            self._debug(
+                1,
                 "Failed to validate review resume ancestry "
-                f"{previous_reviewed_sha} -> {head_sha}: {exc}"
-            ) from exc
+                f"{previous_reviewed_sha} -> {head_sha}: {exc}; starting fresh review",
+            )
+            return None
         if not is_ancestor:
             self._debug(
                 1,

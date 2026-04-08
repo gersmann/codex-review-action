@@ -1035,7 +1035,7 @@ def test_process_review_falls_back_to_fresh_review_when_cached_thread_lookup_fai
     assert "<review_resume_context>" not in codex_client.calls[0]["prompt"]
 
 
-def test_process_review_raises_when_resume_ancestry_check_fails(
+def test_process_review_falls_back_to_fresh_review_when_resume_ancestry_check_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1044,22 +1044,50 @@ def test_process_review_raises_when_resume_ancestry_check_fails(
     )
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
+    codex_client = _FakeCodexClient(
+        json.dumps(
+            {
+                "overall_correctness": "patch is correct",
+                "overall_explanation": "",
+                "overall_confidence_score": None,
+                "carried_forward": [],
+                "findings": [],
+            }
+        )
+    )
     workflow = ReviewWorkflow(
         _make_config(tmp_path),
         github_client=cast(Any, _FakeGitHubClient(_FakePR(issue_comments=[prior_summary]))),
-        codex_client=cast(Any, _FakeCodexClient("{}")),
+        codex_client=cast(Any, codex_client),
     )
 
     def _raise_git(*args: object, **kwargs: object) -> bool:
-        raise subprocess.CalledProcessError(1, "git merge-base")
+        raise subprocess.CalledProcessError(
+            128,
+            ["/usr/bin/git", "merge-base", "--is-ancestor", "prev-sha", "head-sha"],
+            "",
+            "fatal: Not a valid commit name prev-sha",
+        )
 
     monkeypatch.setattr("cli.workflows.review_workflow.git_is_ancestor", _raise_git)
+    monkeypatch.setattr(
+        workflow.context_manager,
+        "write_context_artifacts",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_post_results",
+        lambda *args, **kwargs: ReviewPostingOutcome.empty(0),
+    )
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CODEX_REVIEW_PREVIOUS_HEAD_SHA", "prev-sha")
     monkeypatch.setenv("CODEX_REVIEW_CACHE_HIT", "true")
 
-    with pytest.raises(ReviewResumeError, match="Failed to validate review resume ancestry"):
-        workflow.process_review(7)
+    workflow.process_review(7)
+
+    assert codex_client.calls[0]["resume_thread_id"] is None
+    assert "<review_resume_context>" not in codex_client.calls[0]["prompt"]
 
 
 def test_process_review_raises_when_incremental_git_context_fails(
