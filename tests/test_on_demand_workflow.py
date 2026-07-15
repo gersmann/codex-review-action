@@ -15,9 +15,15 @@ def test_bundled_workflow_runs_only_requested_reviews() -> None:
 
     assert "  comment-review:\n" in workflow
     assert "  review:\n" not in workflow
-    assert "startsWith(github.event.comment.body, '/review')" in workflow
-    assert "startsWith(github.event.comment.body, '/verify')" in workflow
-    assert "'/codex" not in workflow
+    # Triggers must match complete command tokens, never bare prefixes that
+    # would start runners for comments like "/reviewer".
+    assert "startsWith(github.event.comment.body, '/review')" not in workflow
+    assert "startsWith(github.event.comment.body, '/verify')" not in workflow
+    assert "github.event.comment.body == '/review'" in workflow
+    assert "github.event.comment.body == '/verify'" in workflow
+    for command in ("review", "verify", "codex"):
+        assert f"startsWith(github.event.comment.body, '/{command} ')" in workflow
+        assert f"startsWith(github.event.comment.body, '/{command}:')" in workflow
     assert "github.event.issue.pull_request" in workflow
     assert "contents: write" not in workflow
     assert "pull-requests: write" in workflow

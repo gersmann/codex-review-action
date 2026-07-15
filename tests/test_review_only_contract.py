@@ -40,8 +40,8 @@ def test_self_review_workflow_routes_review_comments_without_write_access() -> N
     assert "  pull_request:\n" not in workflow_triggers
     assert "comment-review:" in workflow_text
     assert "  review:\n" not in workflow_text
-    assert "startsWith(github.event.comment.body, '/review')" in workflow_text
-    assert "startsWith(github.event.comment.body, '/verify')" in workflow_text
+    assert "startsWith(github.event.comment.body, '/review ')" in workflow_text
+    assert "startsWith(github.event.comment.body, '/verify ')" in workflow_text
 
     comment_job_index = workflow_text.index("  comment-review:")
     comment_job = workflow_text[comment_job_index:]

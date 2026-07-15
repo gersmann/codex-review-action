@@ -161,12 +161,19 @@ def extract_command(text: str) -> str | None:
     Accepted forms:
       - "/review <options>" / "/verify <claim>"
       - "/review: <options>" / "/verify: <claim>"
+      - "/codex review <options>" / "/codex verify <claim>" (legacy)
     Returns the command text with the action as its first token, or None.
     """
     if not text:
         return None
     t = text.strip()
     low = t.lower()
+    legacy = "/codex"
+    if low.startswith(legacy):
+        rest = t[len(legacy) :]
+        if not rest or rest[0] == ":" or rest[0].isspace():
+            t = "/" + rest.lstrip().lstrip(":").lstrip()
+            low = t.lower()
     for action in ("review", "verify"):
         prefix = f"/{action}"
         if not low.startswith(prefix):
@@ -208,6 +215,12 @@ def _handle_comment_event(
     body = str(comment.get("body") or "")
     command = extract_command(body)
     if not command:
+        first_line = body.strip().splitlines()[0] if body.strip() else ""
+        if first_line.startswith("/"):
+            print(
+                f"Ignoring unrecognized command comment: {first_line!r} "
+                "(expected /review or /verify)"
+            )
         return 0
 
     overrides = _parse_codex_command(command)

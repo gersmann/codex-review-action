@@ -111,7 +111,7 @@ def test_main_noops_for_non_command_comment_event(monkeypatch, tmp_path) -> None
     assert rc == 0
 
 
-def test_main_noops_for_legacy_codex_comment(monkeypatch, tmp_path) -> None:
+def test_main_runs_review_for_legacy_codex_comment(monkeypatch, tmp_path) -> None:
     event_payload = {
         "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
         "comment": {
@@ -131,9 +131,62 @@ def test_main_noops_for_legacy_codex_comment(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issue_comment")
 
+    events: list[str] = []
+
+    class _GitHubClient:
+        def __init__(self, config):
+            assert config.pr_number == 17
+
+        def acknowledge_review_request(self, pr_number, request, *, kind="review"):
+            assert pr_number == 17
+            assert kind == "review"
+            events.append("acknowledged")
+            return AckComment(comment_id=777, event_name=request.event_name)
+
+        def delete_ack_comment(self, pr_number, ack):  # noqa: ARG002
+            events.append("deleted")
+
+    class _Workflow:
+        def __init__(self, config):
+            assert config.pr_number == 17
+
+        def process_review(self, pr_number: int) -> ReviewWorkflowResult:
+            assert pr_number == 17
+            return _make_review_result(findings_count=0)
+
+    monkeypatch.setattr(main_module, "GitHubClient", _GitHubClient)
+    monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
+    monkeypatch.setattr(sys, "argv", ["codex-review"])
+
+    rc = main_module.main()
+
+    assert rc == 0
+    assert events == ["acknowledged", "deleted"]
+
+
+def test_main_logs_ignored_unrecognized_command(monkeypatch, tmp_path, capsys) -> None:
+    event_payload = {
+        "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
+        "comment": {
+            "id": 123,
+            "body": "/deploy now",
+            "user": {"login": "octocat"},
+            "author_association": "MEMBER",
+        },
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event_payload), encoding="utf-8")
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "1")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issue_comment")
+
     class _UnexpectedWorkflow:
         def __init__(self, config):  # noqa: ARG002
-            raise AssertionError("workflow must not be instantiated for a legacy command")
+            raise AssertionError("workflow must not be instantiated for unrecognized command")
 
     monkeypatch.setattr(main_module, "ReviewWorkflow", _UnexpectedWorkflow)
     monkeypatch.setattr(sys, "argv", ["codex-review"])
@@ -141,6 +194,7 @@ def test_main_noops_for_legacy_codex_comment(monkeypatch, tmp_path) -> None:
     rc = main_module.main()
 
     assert rc == 0
+    assert "Ignoring unrecognized command comment: '/deploy now'" in capsys.readouterr().out
 
 
 def test_main_noops_for_unauthorized_codex_review_comment(monkeypatch, tmp_path, capsys) -> None:

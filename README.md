@@ -22,20 +22,18 @@ jobs:
   comment-review:
     if: >-
       (
-        (
-          github.event_name == 'issue_comment' &&
-          (
-            startsWith(github.event.comment.body, '/review') ||
-            startsWith(github.event.comment.body, '/verify')
-          ) &&
-          github.event.issue.pull_request
-        ) || (
-          github.event_name == 'pull_request_review_comment' &&
-          (
-            startsWith(github.event.comment.body, '/review') ||
-            startsWith(github.event.comment.body, '/verify')
-          )
-        )
+        github.event.comment.body == '/review' ||
+        github.event.comment.body == '/verify' ||
+        startsWith(github.event.comment.body, '/review ') ||
+        startsWith(github.event.comment.body, '/review:') ||
+        startsWith(github.event.comment.body, '/verify ') ||
+        startsWith(github.event.comment.body, '/verify:') ||
+        startsWith(github.event.comment.body, '/codex ') ||
+        startsWith(github.event.comment.body, '/codex:')
+      ) &&
+      (
+        github.event_name == 'pull_request_review_comment' ||
+        github.event.issue.pull_request
       ) &&
       github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest

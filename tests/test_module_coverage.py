@@ -703,8 +703,11 @@ def test_main_helpers_cover_commands_and_event_loading(
     assert extract_command("/verify is X true?") == "verify is X true?"
     assert extract_command("/reviewer looks wrong") is None
     assert extract_command("/verified the fix") is None
-    assert extract_command("/codex review") is None
-    assert extract_command("/codex verify") is None
+    assert extract_command("/codex review") == "review"
+    assert extract_command("/codex review model:gpt-5.6-sol") == "review model:gpt-5.6-sol"
+    assert extract_command("/codex: verify is X true?") == "verify is X true?"
+    assert extract_command("/codex fix everything") is None
+    assert extract_command("/codexy review") is None
     assert extract_command("/codex") is None
     assert extract_command("not a command") is None
     assert extract_command("") is None
