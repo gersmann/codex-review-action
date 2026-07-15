@@ -8,7 +8,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from .clients.github_client import GitHubClient
 from .core.config import ReviewConfig
@@ -22,9 +22,11 @@ LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class _ReviewCommentOverrides:
-    model_name: str | None = None
-    reasoning_effort: str | None = None
+class _CodexCommandRequest:
+    action: Literal["review", "verify"]
+    model_name: str | None
+    reasoning_effort: str | None
+    claim: str = ""
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -147,29 +149,29 @@ def load_github_event() -> dict[str, Any]:
         raise ConfigurationError(f"Failed to load GitHub event data: {e}") from e
 
 
-def extract_codex_command(text: str) -> str | None:
-    """Extract a /codex command from a comment body.
+def extract_command(text: str) -> str | None:
+    """Extract a /review or /verify command from a comment body.
 
     Accepted forms:
-      - "/codex <instructions>"
-      - "/codex: <instructions>"
-    Returns the command text following `/codex`, or None.
+      - "/review <options>" / "/verify <claim>"
+      - "/review: <options>" / "/verify: <claim>"
+    Returns the command text with the action as its first token, or None.
     """
     if not text:
         return None
     t = text.strip()
     low = t.lower()
-    prefix = "/codex"
-    if not low.startswith(prefix):
-        return None
-
-    if len(t) > len(prefix):
-        next_char = t[len(prefix)]
-        if next_char != ":" and not next_char.isspace():
-            return None
-
-    rest = t[len(prefix) :].lstrip().lstrip(":").strip()
-    return rest or None
+    for action in ("review", "verify"):
+        prefix = f"/{action}"
+        if not low.startswith(prefix):
+            continue
+        if len(t) > len(prefix):
+            next_char = t[len(prefix)]
+            if next_char != ":" and not next_char.isspace():
+                continue
+        rest = t[len(prefix) :].lstrip().lstrip(":").strip()
+        return f"{action} {rest}" if rest else action
+    return None
 
 
 def _load_runtime_config(
@@ -198,15 +200,14 @@ def _handle_comment_event(
         return None
 
     body = str(comment.get("body") or "")
-    command = extract_codex_command(body)
+    command = extract_command(body)
     if not command:
         return 0
 
-    overrides = _parse_review_comment(command)
-    if overrides is None:
+    overrides = _parse_codex_command(command)
+    if overrides is None or overrides.action != "review":
         print(
-            "Ignoring /codex command because this action is review-only. "
-            "Use /codex review to request a review."
+            "Ignoring command because this action is review-only. Use /review to request a review."
         )
         return 0
 
@@ -263,22 +264,30 @@ def _extract_event_comment(actions_event: dict[str, Any] | None) -> dict[str, An
     return comment if isinstance(comment, dict) else None
 
 
-def _parse_review_comment(command: str) -> _ReviewCommentOverrides | None:
+def _parse_codex_command(command: str) -> _CodexCommandRequest | None:
     tokens = command.split()
-    if not tokens or tokens[0].lower() != "review":
+    if not tokens:
         return None
+    action_token = tokens[0].lower()
+    if action_token not in {"review", "verify"}:
+        return None
+    action = cast(Literal["review", "verify"], action_token)
 
     values: dict[str, str] = {}
+    claim_words: list[str] = []
     for token in tokens[1:]:
         key, separator, value = token.partition(":")
         normalized_key = key.lower()
-        if not separator or normalized_key not in {"model", "reasoning"}:
-            raise ConfigurationError(f"Unsupported /codex review option: {token}")
-        if not value:
-            raise ConfigurationError(f"Missing value for /codex review option: {normalized_key}")
-        if normalized_key in values:
-            raise ConfigurationError(f"Duplicate /codex review option: {normalized_key}")
-        values[normalized_key] = value
+        if separator and normalized_key in {"model", "reasoning"} and not claim_words:
+            if not value:
+                raise ConfigurationError(f"Missing value for /{action} option: {normalized_key}")
+            if normalized_key in values:
+                raise ConfigurationError(f"Duplicate /{action} option: {normalized_key}")
+            values[normalized_key] = value
+        elif action == "verify":
+            claim_words.append(token)
+        else:
+            raise ConfigurationError(f"Unsupported /review option: {token}")
 
     reasoning_effort = values.get("reasoning")
     if reasoning_effort is not None:
@@ -287,9 +296,11 @@ def _parse_review_comment(command: str) -> _ReviewCommentOverrides | None:
         except ValueError as error:
             raise ConfigurationError(str(error)) from error
 
-    return _ReviewCommentOverrides(
+    return _CodexCommandRequest(
+        action=action,
         model_name=values.get("model"),
         reasoning_effort=reasoning_effort,
+        claim=" ".join(claim_words),
     )
 
 
@@ -298,7 +309,7 @@ def _is_commenter_allowed(config: ReviewConfig, comment: dict[str, Any]) -> bool
     if config.is_commenter_allowed(author_association):
         return True
     print(
-        "Ignoring /codex command from unauthorized commenter association "
+        "Ignoring command from unauthorized commenter association "
         f"{author_association or '<missing>'}. Allowed: "
         f"{', '.join(config.allowed_commenter_associations) or '<none>'}."
     )

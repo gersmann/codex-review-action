@@ -54,7 +54,7 @@ from ..review.review_prompt import (
 )
 
 SUMMARY_TIP = (
-    'Tip: request another review with "/codex review" and optionally add '
+    'Tip: request another review with "/review" and optionally add '
     "`model:gpt-5.6-terra` or `reasoning:xhigh`."
 )
 

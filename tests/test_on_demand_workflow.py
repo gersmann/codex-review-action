@@ -15,7 +15,9 @@ def test_bundled_workflow_runs_only_requested_reviews() -> None:
 
     assert "  comment-review:\n" in workflow
     assert "  review:\n" not in workflow
-    assert "startsWith(github.event.comment.body, '/codex review')" in workflow
+    assert "startsWith(github.event.comment.body, '/review')" in workflow
+    assert "startsWith(github.event.comment.body, '/verify')" in workflow
+    assert "'/codex" not in workflow
     assert "github.event.issue.pull_request" in workflow
     assert "contents: write" not in workflow
     assert "pull-requests: write" in workflow

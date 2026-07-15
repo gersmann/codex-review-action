@@ -1,6 +1,6 @@
 # Codex Review Action
 
-Run focused pull-request reviews when an authorized reviewer comments `/codex review`. The bundled workflow does not run when a pull request is opened or updated.
+Run focused pull-request reviews when an authorized reviewer comments `/review`. The bundled workflow does not run when a pull request is opened or updated.
 
 The reviewer posts precise inline findings and refreshes a PR-level summary. It never edits repository contents.
 
@@ -24,11 +24,17 @@ jobs:
       (
         (
           github.event_name == 'issue_comment' &&
-          startsWith(github.event.comment.body, '/codex review') &&
+          (
+            startsWith(github.event.comment.body, '/review') ||
+            startsWith(github.event.comment.body, '/verify')
+          ) &&
           github.event.issue.pull_request
         ) || (
           github.event_name == 'pull_request_review_comment' &&
-          startsWith(github.event.comment.body, '/codex review')
+          (
+            startsWith(github.event.comment.body, '/review') ||
+            startsWith(github.event.comment.body, '/verify')
+          )
         )
       ) &&
       github.actor != 'dependabot[bot]'
@@ -62,9 +68,9 @@ jobs:
 
 ## Commands
 
-- `/codex review` runs a review with `gpt-5.6-luna` and high reasoning by default.
-- `/codex review reasoning:xhigh model:gpt-5.6-sol` overrides one requested review.
-- Other `/codex` commands are ignored.
+- `/review` runs a review with `gpt-5.6-luna` and high reasoning by default.
+- `/review reasoning:xhigh model:gpt-5.6-sol` overrides one requested review.
+- Other commands are ignored.
 
 After authorizing a request, the reviewer immediately adds a rocket reaction
 and replies that the review is queued. Inline requests receive inline replies.
@@ -112,7 +118,7 @@ does not expose every pricing dimension.
 
 ## Security
 
-- The bundled workflow has no `pull_request` trigger and requires an explicit `/codex review` comment.
+- The bundled workflow has no `pull_request` trigger and requires an explicit `/review` comment.
 - It verifies that the PR head belongs to the same repository before checkout or API-key exposure.
 - It disables live web search for comment-triggered reviews.
 - It grants `contents: read`, `pull-requests: write`, and `issues: write`; it never receives content write access.

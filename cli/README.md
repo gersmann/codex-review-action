@@ -45,15 +45,15 @@ Defaults:
 
 ## GitHub Actions Events
 
-The bundled workflow listens only for `issue_comment` and `pull_request_review_comment` events whose body begins with `/codex review`. Pull-request submission does not start a review.
+The bundled workflow listens only for `issue_comment` and `pull_request_review_comment` events whose body begins with `/review` or `/verify`. Pull-request submission does not start a review.
 
 Authorized comments may override one run:
 
 ```text
-/codex review reasoning:xhigh model:gpt-5.6-sol
+/review reasoning:xhigh model:gpt-5.6-sol
 ```
 
-Unsupported `/codex` commands and unauthorized commenters are ignored.
+Unsupported commands and unauthorized commenters are ignored.
 Authorized requests receive a rocket reaction and a queued reply before the
 review starts.
 

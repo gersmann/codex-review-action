@@ -79,7 +79,7 @@ def _make_review_result(
     )
 
 
-def test_main_noops_for_non_codex_comment_event(monkeypatch, tmp_path) -> None:
+def test_main_noops_for_non_command_comment_event(monkeypatch, tmp_path) -> None:
     event_payload = {
         "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
         "comment": {
@@ -110,12 +110,12 @@ def test_main_noops_for_non_codex_comment_event(monkeypatch, tmp_path) -> None:
     assert rc == 0
 
 
-def test_main_noops_for_bare_codex_comment(monkeypatch, tmp_path) -> None:
+def test_main_noops_for_legacy_codex_comment(monkeypatch, tmp_path) -> None:
     event_payload = {
         "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
         "comment": {
             "id": 123,
-            "body": "/codex",
+            "body": "/codex review",
             "user": {"login": "octocat"},
             "author_association": "MEMBER",
         },
@@ -132,7 +132,7 @@ def test_main_noops_for_bare_codex_comment(monkeypatch, tmp_path) -> None:
 
     class _UnexpectedWorkflow:
         def __init__(self, config):  # noqa: ARG002
-            raise AssertionError("workflow must not be instantiated for a bare command")
+            raise AssertionError("workflow must not be instantiated for a legacy command")
 
     monkeypatch.setattr(main_module, "ReviewWorkflow", _UnexpectedWorkflow)
     monkeypatch.setattr(sys, "argv", ["codex-review"])
@@ -147,7 +147,7 @@ def test_main_noops_for_unauthorized_codex_review_comment(monkeypatch, tmp_path,
         "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
         "comment": {
             "id": 123,
-            "body": "/codex review reasoning:xhigh",
+            "body": "/review reasoning:xhigh",
             "user": {"login": "octocat"},
             "author_association": "CONTRIBUTOR",
         },
@@ -180,7 +180,7 @@ def test_main_rejects_invalid_review_reasoning_override(monkeypatch, tmp_path, c
         "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
         "comment": {
             "id": 123,
-            "body": "/codex review reasoning:extreme",
+            "body": "/review reasoning:extreme",
             "user": {"login": "octocat"},
             "author_association": "MEMBER",
         },
@@ -213,7 +213,7 @@ def test_main_rejects_unpriced_model_before_acknowledging(monkeypatch, tmp_path,
         "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
         "comment": {
             "id": 123,
-            "body": "/codex review model:gpt-5.4",
+            "body": "/review model:gpt-5.4",
             "user": {"login": "octocat"},
             "author_association": "MEMBER",
         },
@@ -244,7 +244,7 @@ def test_main_runs_review_workflow_with_comment_overrides(monkeypatch, tmp_path,
         "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
         "comment": {
             "id": 123,
-            "body": "/codex review reasoning:X_HIGH model:gpt-5.6-sol",
+            "body": "/review reasoning:X_HIGH model:gpt-5.6-sol",
             "user": {"login": "octocat"},
             "author_association": "COLLABORATOR",
         },
@@ -295,14 +295,14 @@ def test_main_runs_review_workflow_with_comment_overrides(monkeypatch, tmp_path,
     assert "Review completed: patch is incorrect, 1 findings" in capsys.readouterr().out
 
 
-def test_main_noops_for_bare_codex_instructions_as_review_only(
+def test_main_noops_for_unwired_verify_command_as_review_only(
     monkeypatch, tmp_path, capsys
 ) -> None:
     event_payload = {
         "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
         "comment": {
             "id": 123,
-            "body": "/codex fix docs",
+            "body": "/verify is the retry loop wrong?",
             "user": {"login": "octocat"},
             "author_association": "COLLABORATOR",
         },
@@ -335,7 +335,7 @@ def test_main_runs_review_workflow_with_comment_defaults(monkeypatch, tmp_path) 
         "pull_request": {"number": 19},
         "comment": {
             "id": 456,
-            "body": "/codex review",
+            "body": "/review",
             "user": {"login": "octocat"},
             "author_association": "MEMBER",
         },
@@ -552,3 +552,58 @@ def test_main_returns_one_for_review_workflow_errors(monkeypatch, capsys) -> Non
 
     assert rc == 1
     assert "Review error: boom" in capsys.readouterr().err
+
+
+def test_parse_codex_command_verify_with_options_and_claim() -> None:
+    from cli.main import _parse_codex_command
+
+    parsed = _parse_codex_command(
+        "verify model:gpt-5.6-terra reasoning:xhigh is the retry loop off by one?"
+    )
+
+    assert parsed is not None
+    assert parsed.action == "verify"
+    assert parsed.model_name == "gpt-5.6-terra"
+    assert parsed.reasoning_effort == "xhigh"
+    assert parsed.claim == "is the retry loop off by one?"
+
+
+def test_parse_codex_command_verify_bare() -> None:
+    from cli.main import _parse_codex_command
+
+    parsed = _parse_codex_command("verify")
+
+    assert parsed is not None
+    assert parsed.action == "verify"
+    assert parsed.model_name is None
+    assert parsed.reasoning_effort is None
+    assert parsed.claim == ""
+
+
+def test_parse_codex_command_review_still_rejects_free_text() -> None:
+    from cli.core.exceptions import ConfigurationError
+    from cli.main import _parse_codex_command
+
+    with pytest.raises(ConfigurationError):
+        _parse_codex_command("review please check the loop")
+
+
+def test_parse_codex_command_unknown_action_returns_none() -> None:
+    from cli.main import _parse_codex_command
+
+    assert _parse_codex_command("edit something") is None
+
+
+def test_parse_codex_command_verify_options_after_claim_are_claim_text() -> None:
+    from cli.main import _parse_codex_command
+
+    parsed = _parse_codex_command("verify is the retry loop using model:gpt-4 broken?")
+
+    assert parsed is not None
+    assert parsed.model_name is None
+    assert parsed.claim == "is the retry loop using model:gpt-4 broken?"
+    # An invalid reasoning value after claim start must not raise either:
+    parsed2 = _parse_codex_command("verify is reasoning:bananas ok")
+    assert parsed2 is not None
+    assert parsed2.reasoning_effort is None
+    assert parsed2.claim == "is reasoning:bananas ok"
