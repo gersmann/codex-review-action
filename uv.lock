@@ -145,21 +145,21 @@ wheels = [
 
 [[package]]
 name = "codex-python"
-version = "1.122.0"
+version = "1.141.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/88/ec/05eb4c790e930ee8561c201986ae4696153da04e464b3ff2f53faa8ed746/codex_python-1.122.0.tar.gz", hash = "sha256:45b97ae73cb6f303371650ff9fb7be52a62079d76a7b01b3bd66b191e644cf20", size = 81500, upload-time = "2026-04-27T11:30:42.946Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/af/90/c86daffbee44e968cda0b1903870c65a00605bebd9684c535fc2dbbd42d2/codex_python-1.141.1.tar.gz", hash = "sha256:53971393d3e9a78611712b9c05e7af43d92274d413b09ab65a5bdfe487356060", size = 94992, upload-time = "2026-07-07T11:30:07.507Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ab/c6/b66356e4956d5298042cab157ae4d8adca2c1b2e27ea112fd64cd672e4e0/codex_python-1.122.0-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:5013978a0a4ee37281126a17c1c002dbcf5baa9b322d8aaa50aa025e4c01c0c9", size = 80601268, upload-time = "2026-04-27T11:30:03.642Z" },
-    { url = "https://files.pythonhosted.org/packages/3e/72/7480141d44f2d6f5d83833303fb2d924a5033f4ed48cfec5b41f6c7daa27/codex_python-1.122.0-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:04099e13837a9cf5542f5f68a8525c037b14edd076ff6ea339e26354027d5751", size = 73440781, upload-time = "2026-04-27T11:30:09.446Z" },
-    { url = "https://files.pythonhosted.org/packages/cc/3a/b074b22bd2cea8ba8eac08c78cb7c004f399c4af4360b5a87fc97322f2bf/codex_python-1.122.0-cp312-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:0a32c18745959b9a2de3ba4c770f0cb09775a89c5c7db1348ea81f20a489bc57", size = 71684572, upload-time = "2026-04-27T11:30:14.182Z" },
-    { url = "https://files.pythonhosted.org/packages/c5/89/54ce3630d2eea9c30777f96dccbd286e58fa6ef0a8992b3ca6da65aa6b12/codex_python-1.122.0-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ee69050a0dd7140497ec0782eb7737a25aa7025f485283aaed3e3c99a72fd051", size = 76710420, upload-time = "2026-04-27T11:30:19.339Z" },
-    { url = "https://files.pythonhosted.org/packages/92/b5/069cee18d23ba38bf810133d4ba23daac0f8c4fb17ac90ad8412c26ea991/codex_python-1.122.0-cp312-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:bc27cc4b01950e88a4ea141302b1d5c9034de644b8ac416fcad3763a1d0386bc", size = 71860891, upload-time = "2026-04-27T11:30:24.34Z" },
-    { url = "https://files.pythonhosted.org/packages/d7/75/a25153ecb4bf1c180fe5c2d923258379cac62bd383bdb7bea5ca6057fad6/codex_python-1.122.0-cp312-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:e0c152d9a54e1b9d48301ec50b8a91623a820b5c708c7da22ffd59bb96deeb65", size = 76910977, upload-time = "2026-04-27T11:30:29.171Z" },
-    { url = "https://files.pythonhosted.org/packages/04/7a/349e04e9b787a6edff1948ec51a32230cca5eb8e6ff479e40841bfe27b52/codex_python-1.122.0-cp312-abi3-win_amd64.whl", hash = "sha256:e5bb5035b38e16f1ec4859c3fdb3a42b151571aa1376b62dcd5183029f41e78e", size = 76067963, upload-time = "2026-04-27T11:30:34.56Z" },
-    { url = "https://files.pythonhosted.org/packages/0e/e9/1d86867be770346a60d6a6bf29b337e04b25c33531155a5ebee8840aa478/codex_python-1.122.0-cp312-abi3-win_arm64.whl", hash = "sha256:f29fbdccfb922e1e7371435327de22b5b2f48679fcb6c2469de3eb3957aa34f2", size = 70232953, upload-time = "2026-04-27T11:30:39.8Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/ee/0ed8d227d6b267845c4cd2eb6574c402c2ea99997b23343133d7134f3ee5/codex_python-1.141.1-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:f1f3d5a1358bf3e8d47ffc6a16254e11270e64a8d0245a009391d6e878489e60", size = 99845410, upload-time = "2026-07-07T11:29:32.123Z" },
+    { url = "https://files.pythonhosted.org/packages/86/5f/54da371ea0d6e2911835bfbaa5dccaf13558e581e8ac106f10ff9de0f7fd/codex_python-1.141.1-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:9efc5d4b09ad98514a1e4877760a870e48c5683b63907acfeeff216522131fea", size = 92654899, upload-time = "2026-07-07T11:29:36.852Z" },
+    { url = "https://files.pythonhosted.org/packages/70/3a/7aa9d2f7454b604fd4129f792f3751adc1f3754a849fb8501d552f5eec9e/codex_python-1.141.1-cp312-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:aa8562b531e3a19895461fe6fc80926c7f8e3ee6723cc5ffbd22e95e58eee1bc", size = 95906329, upload-time = "2026-07-07T11:29:41.155Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/e5/d930e6be6b6a9e25e709ae0fcd9868c210c6817f2f58a40e758e4b4c13b8/codex_python-1.141.1-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9a20481374abcab21355ec3db84a91a3ffcbc00779c620d57598b8103eded45b", size = 102441731, upload-time = "2026-07-07T11:29:45.735Z" },
+    { url = "https://files.pythonhosted.org/packages/36/9b/e8c52f436dca627bb0ed02c49d2da374a37fe9b3d93127b412122c3ede22/codex_python-1.141.1-cp312-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:2d7ed31d2fbbb2c52e440b4ff2e4465af218fda40d6af08c4dce90668d64d820", size = 96082576, upload-time = "2026-07-07T11:29:50.81Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/d8/f3dec12f06056b3600d5b9e6aae0a1e34ea00c6100dcb288fe5bf5bcb686/codex_python-1.141.1-cp312-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:953591e6ff83667f4841465f149aac71a5e776f49655c2a309ea627f6ff5eed0", size = 102642274, upload-time = "2026-07-07T11:29:55.43Z" },
+    { url = "https://files.pythonhosted.org/packages/77/f5/a9ae7196a3196fa3a648ef98824e0a365e362b9140750e3b72dd96742804/codex_python-1.141.1-cp312-abi3-win_amd64.whl", hash = "sha256:98f48317552c0b3ddf080fe697867954e330eb93b4b4ffba2f72220b1d00ba67", size = 87019420, upload-time = "2026-07-07T11:29:59.899Z" },
+    { url = "https://files.pythonhosted.org/packages/50/74/0d2ed1c2ddc2ab49368aeffed132d53ae1700091b8c44d7c72f0b9e8de87/codex_python-1.141.1-cp312-abi3-win_arm64.whl", hash = "sha256:0bc8f32b0f15c3470494bc71b3b1b7aa93f7c8bb3ae36e2ac2166a559376c739", size = 100176080, upload-time = "2026-07-07T11:30:04.257Z" },
 ]
 
 [[package]]
@@ -182,7 +182,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "codex-python", specifier = "==1.122.0" },
+    { name = "codex-python", specifier = "==1.141.1" },
     { name = "pydantic", specifier = "==2.12.5" },
     { name = "pygithub", specifier = "==2.8.1" },
 ]

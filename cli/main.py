@@ -12,7 +12,7 @@ from typing import Any
 
 from .core.config import ReviewConfig
 from .core.exceptions import CodexReviewError, ConfigurationError
-from .core.models import CommentContext
+from .core.reasoning_effort import REASONING_EFFORT_VALUES, normalize_reasoning_effort
 from .workflows.edit_workflow import EditWorkflow
 from .workflows.review_workflow import ReviewWorkflow
 
@@ -20,10 +20,9 @@ LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class _CommentCommand:
-    command: str
-    pr_number: int
-    comment_ctx: CommentContext
+class _ReviewCommentOverrides:
+    model_name: str | None = None
+    reasoning_effort: str | None = None
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -94,9 +93,10 @@ Environment Variables:
     parser.add_argument(
         "--reasoning-effort",
         dest="reasoning_effort",
-        choices=["minimal", "low", "medium", "high"],
+        type=normalize_reasoning_effort,
+        choices=REASONING_EFFORT_VALUES,
         default="medium",
-        help="Reasoning effort level (default: medium)",
+        help=f"Reasoning effort level: {' | '.join(REASONING_EFFORT_VALUES)} (default: medium)",
     )
     parser.add_argument(
         "--web-search-mode",
@@ -212,14 +212,35 @@ def _handle_comment_event(
     command = extract_edit_command(body)
     if not command:
         return 0
-    pending_command = _prepare_comment_command(config, comment, body, command)
-    if pending_command is None:
+
+    overrides = _parse_review_comment(command)
+    if overrides is None:
+        print(
+            "Ignoring /codex command because this action is review-only. "
+            "Use /codex review to request a review."
+        )
         return 0
-    return EditWorkflow(config).process_edit_command(
-        pending_command.command,
-        pending_command.pr_number,
-        pending_command.comment_ctx,
-    )
+
+    if not _is_commenter_allowed(config, comment):
+        return 0
+
+    pr_number = config.pr_number
+    if pr_number is None:
+        raise ConfigurationError("This workflow must be triggered by a PR-related event")
+
+    config_kwargs: dict[str, object] = {
+        "mode": "review",
+        "pr_number": pr_number,
+        "force_fresh_review": (
+            overrides.model_name is not None or overrides.reasoning_effort is not None
+        ),
+    }
+    if overrides.model_name is not None:
+        config_kwargs["model_name"] = overrides.model_name
+    if overrides.reasoning_effort is not None:
+        config_kwargs["reasoning_effort"] = overrides.reasoning_effort
+
+    return _run_mode_workflow(ReviewConfig.from_args(**config_kwargs))
 
 
 def _extract_event_comment(actions_event: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -229,28 +250,34 @@ def _extract_event_comment(actions_event: dict[str, Any] | None) -> dict[str, An
     return comment if isinstance(comment, dict) else None
 
 
-def _prepare_comment_command(
-    config: ReviewConfig,
-    comment: dict[str, Any],
-    body: str,
-    command: str,
-) -> _CommentCommand | None:
-    if config.mode != "act":
-        print(
-            "Ignoring /codex command because mode is "
-            f"{config.mode!r}; set CODEX_MODE=act to enable comment-triggered edits."
-        )
+def _parse_review_comment(command: str) -> _ReviewCommentOverrides | None:
+    tokens = command.split()
+    if not tokens or tokens[0].lower() != "review":
         return None
 
-    if not _is_commenter_allowed(config, comment):
-        return None
+    values: dict[str, str] = {}
+    for token in tokens[1:]:
+        key, separator, value = token.partition(":")
+        normalized_key = key.lower()
+        if not separator or normalized_key not in {"model", "reasoning"}:
+            raise ConfigurationError(f"Unsupported /codex review option: {token}")
+        if not value:
+            raise ConfigurationError(f"Missing value for /codex review option: {normalized_key}")
+        if normalized_key in values:
+            raise ConfigurationError(f"Duplicate /codex review option: {normalized_key}")
+        values[normalized_key] = value
 
-    pr_number = config.pr_number
-    if pr_number is None:
-        raise ConfigurationError("This workflow must be triggered by a PR-related event")
+    reasoning_effort = values.get("reasoning")
+    if reasoning_effort is not None:
+        try:
+            reasoning_effort = normalize_reasoning_effort(reasoning_effort)
+        except ValueError as error:
+            raise ConfigurationError(str(error)) from error
 
-    comment_ctx = _build_comment_context(comment, body)
-    return _CommentCommand(command=command, pr_number=pr_number, comment_ctx=comment_ctx)
+    return _ReviewCommentOverrides(
+        model_name=values.get("model"),
+        reasoning_effort=reasoning_effort,
+    )
 
 
 def _is_commenter_allowed(config: ReviewConfig, comment: dict[str, Any]) -> bool:
@@ -263,20 +290,6 @@ def _is_commenter_allowed(config: ReviewConfig, comment: dict[str, Any]) -> bool
         f"{', '.join(config.allowed_commenter_associations) or '<none>'}."
     )
     return False
-
-
-def _build_comment_context(comment: dict[str, Any], body: str) -> CommentContext:
-    comment_ctx = CommentContext.from_mapping(
-        {
-            "id": comment.get("id"),
-            "event_name": os.environ.get("GITHUB_EVENT_NAME", ""),
-            "author": str((comment.get("user") or {}).get("login") or ""),
-            "body": body,
-        }
-    )
-    if comment_ctx is None:
-        raise ConfigurationError("Invalid comment event payload: missing id or event name")
-    return comment_ctx
 
 
 def _run_mode_workflow(config: ReviewConfig) -> int:

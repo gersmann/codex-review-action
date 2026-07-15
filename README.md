@@ -1,9 +1,9 @@
-# Codex Review Action (Review + Act)
+# Codex Review Action
 
-Run Codex to review pull requests and, on demand, make autonomous edits driven by `/codex` comments.
+Run Codex to review pull requests automatically or on demand through `/codex review` comments.
 
 - **Review**: posts precise inline review comments and a PR-level summary. When there are no findings, only the summary is posted.
-- **Act**: applies focused edits when trusted users comment `/codex`; commits and pushes to the PR branch.
+- **Escalate**: lets trusted reviewers override the model and reasoning effort for a specific PR without granting content write access.
 
 ## Quick Start (Review)
 
@@ -24,87 +24,93 @@ jobs:
         with:
           fetch-depth: 0
       - name: Codex autonomous review
-        uses: gersmann/codex-review-action@v1
+        uses: nomadlabsinc/codex-review-action@v1.9.0-nomad.1
         with:
           mode: review
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          model: gpt-5.6-terra
+          reasoning_effort: low
 ```
 
-## Act on `/codex` Comments
+## Review on `/codex review` Comments
 
-When a trusted user comments `/codex <instructions>` on a PR, the action checks out the branch, runs the coding agent, and pushes the result. Give the agent a working environment so it can run tests before pushing.
+When a trusted user comments `/codex review` on a PR, the action runs another review. Optional leading `reasoning:` and `model:` tokens override that run's defaults.
 
 ```yaml
-name: Codex Act
+name: Codex Comment Review
 on:
   issue_comment: { types: [created] }
   pull_request_review_comment: { types: [created] }
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
   issues: write
 concurrency:
-  group: codex-act-${{ github.event.issue.number || github.event.pull_request.number || github.ref }}
+  group: codex-comment-review-${{ github.event.issue.number || github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 jobs:
-  act:
-    name: Act on /codex comments
+  comment-review:
+    name: Review on /codex review comments
     if: >-
       (
         (
           github.event_name == 'issue_comment' &&
-          startsWith(github.event.comment.body, '/codex') &&
+          startsWith(github.event.comment.body, '/codex review') &&
           github.event.issue.pull_request
         ) || (
           github.event_name == 'pull_request_review_comment' &&
-          startsWith(github.event.comment.body, '/codex')
+          startsWith(github.event.comment.body, '/codex review')
         )
       ) &&
       github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
+      - name: Verify same-repository PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          head_repository=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name')
+          if [[ "$head_repository" != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::Comment-triggered reviews are limited to same-repository pull requests"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
 
-      # Give the agent a working environment so it can build/test.
-      # Replace with your own setup (install deps, run migrations, etc.).
-      - uses: actions/setup-node@v4
+      - name: Codex comment-triggered review
+        uses: nomadlabsinc/codex-review-action@v1.9.0-nomad.1
         with:
-          node-version: '20'
-      - run: npm ci
-
-      - name: Codex autonomous edits
-        uses: gersmann/codex-review-action@v1
-        with:
-          mode: act
+          mode: review
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          model: gpt-5.6-terra
+          reasoning_effort: low
+          web_search_mode: disabled
           allowed_commenter_associations: MEMBER,OWNER,COLLABORATOR
 ```
 
 ### `/codex` Commands
 
-- **`/codex <instructions>`** — apply minimal diffs matching the instructions.
-- Bare **`/codex`** is ignored; include explicit instructions after the command.
-- **`/codex address comments`** (or natural variants like "please fix the review comments") — address unresolved review threads. Only unresolved threads are considered; resolved threads are ignored.
+- **`/codex review`** — run a review with the workflow defaults.
+- **`/codex review reasoning:xhigh model:gpt-5.6-sol`** — run an escalated review with per-comment overrides.
+- Other **`/codex <instructions>`** commands are ignored because this fork is review-only.
 
 ## Inputs
 
 | Input | Description | Default |
 |-------|-------------|---------|
 | `openai_api_key` | OpenAI API key | *required* |
-| `mode` | `review` or `act` | `review` |
+| `mode` | `review` | `review` |
 | **Model** | | |
 | `model` | Model name | `gpt-5.4` |
-| `reasoning_effort` | `minimal` / `low` / `medium` / `high` | `medium` |
+| `reasoning_effort` | `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` (`x-high` is accepted as an alias) | `medium` |
 | **Review-only** | | |
 | `additional_prompt` | Extra reviewer instructions (verbatim) | |
-| **Act-only** | | |
-| `act_instructions` | Extra guidance appended to the edit prompt | |
-| `allowed_commenter_associations` | Comma-separated GitHub `author_association` values allowed to trigger Act mode | `MEMBER,OWNER,COLLABORATOR` |
-| `dry_run` | `0` or `1` — skip push | `0` |
+| `allowed_commenter_associations` | Comma-separated GitHub `author_association` values allowed to trigger comment reviews | `MEMBER,OWNER,COLLABORATOR` |
+| `dry_run` | `0` or `1` — do not post comments | `0` |
 | **Debug** | | |
 | `debug_level` | `0` (off) / `1` (basic) / `2` (trace) | `1` |
 | `stream_agent_messages` | `0` or `1` — stream model output to logs | `1` |
@@ -136,10 +142,11 @@ When a prior Codex review exists on the PR, reruns only reuse **unresolved Codex
 
 ## Security & Permissions
 
-- Act mode also enforces a built-in `author_association` allowlist. Keep the workflow-level `if:` guard as defense in depth if you want early job skipping.
+- Verify that a comment-triggered PR's head repository matches the base repository before checking out PR code or exposing the OpenAI API key.
+- Disable live web search on comment-triggered reviews so untrusted diffs cannot use the review agent as a network exfiltration channel.
+- Comment-triggered reviews enforce a built-in `author_association` allowlist. Keep the workflow-level `if:` guard as defense in depth if you want early job skipping.
 - Invalid `allowed_commenter_associations` values fail fast at startup so auth policy drift is visible immediately.
-- For forks, the default `GITHUB_TOKEN` generally cannot push — run Act only on branches in the main repo, or use a PAT with fork access.
-- Grant only what's needed: `contents: write` (push), `pull-requests: write` (reviews), `issues: write` (summary comments and Act replies).
+- Grant only what's needed: `contents: read`, `pull-requests: write` (reviews), and `issues: write` (summary comments).
 
 ## Troubleshooting
 
@@ -165,6 +172,4 @@ uv pip install --editable ../codex-python
 
 ## Release & Versioning
 
-This repo uses [Release Please](https://github.com/googleapis/release-please) in no-PR mode. Tags and GitHub Releases are created automatically on push to `main`. After publish, the `v1` tag is updated to point to the latest release.
-
-To force a specific version: Actions > "Release Please" > Run workflow > provide `release_as` (e.g., `1.3.0`).
+Nomad fork releases use explicit tags such as `v1.9.0-nomad.1`. Release automation is disabled so no workflow receives `contents: write`; create and push release tags manually after merging verified changes to `main`.

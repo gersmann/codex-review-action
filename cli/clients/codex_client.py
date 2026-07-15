@@ -14,9 +14,9 @@ from pydantic import BaseModel
 
 from ..core.config import ReviewConfig, make_debug
 from ..core.exceptions import CodexExecutionError
+from ..core.reasoning_effort import normalize_reasoning_effort
 from .codex_event_debugger import CodexEventDebugger
 
-_REASONING_EFFORT_VALUES = {"minimal", "low", "medium", "high", "xhigh"}
 _SANDBOX_MODE_VALUES = {"read-only", "workspace-write", "danger-full-access"}
 _WEB_SEARCH_MODE_VALUES = ("disabled", "cached", "live")
 
@@ -390,21 +390,11 @@ class CodexClient:
         return bool(self.config.stream_output and not suppress_stream)
 
     def _resolve_effort(self, reasoning_effort: str | None) -> str:
-        return self._normalize_reasoning_effort(
-            reasoning_effort or self.config.reasoning_effort or "medium",
-            "medium",
-        )
-
-    def _normalize_reasoning_effort(self, value: object, default: str) -> str:
-        if not isinstance(value, str):
-            return default
-        normalized = value.strip().lower().replace("_", "")
-        if normalized == "x-high":
-            normalized = "xhigh"
-        if normalized in _REASONING_EFFORT_VALUES:
-            return normalized
-        self._debug(1, f"Invalid reasoning effort '{value}', falling back to '{default}'")
-        return default
+        value = reasoning_effort or self.config.reasoning_effort or "medium"
+        try:
+            return normalize_reasoning_effort(value)
+        except ValueError as error:
+            raise CodexExecutionError(str(error)) from error
 
     def _normalize_sandbox_mode(self, value: object, default: str) -> str:
         if not isinstance(value, str):

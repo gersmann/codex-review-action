@@ -129,6 +129,7 @@ def _agent_message_completed(
         {
             "method": "item/completed",
             "params": {
+                "completedAtMs": 0,
                 "threadId": "thread-1",
                 "turnId": "turn-1",
                 "item": item,
@@ -157,6 +158,7 @@ def _reasoning_item_completed(
         {
             "method": "item/completed",
             "params": {
+                "completedAtMs": 0,
                 "threadId": "thread-1",
                 "turnId": "turn-1",
                 "item": {
@@ -210,6 +212,7 @@ def _command_item_started(
         {
             "method": "item/started",
             "params": {
+                "startedAtMs": 0,
                 "threadId": "thread-1",
                 "turnId": "turn-1",
                 "item": {
@@ -233,6 +236,7 @@ def _command_item_completed(
         {
             "method": "item/completed",
             "params": {
+                "completedAtMs": 0,
                 "threadId": "thread-1",
                 "turnId": "turn-1",
                 "item": {
@@ -471,7 +475,7 @@ def test_execute_structured_raises_when_schema_turn_emits_no_output(
         )
 
 
-def test_execute_text_falls_back_to_medium_reasoning_effort(
+def test_execute_text_rejects_unknown_reasoning_effort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _reset_fake_codex()
@@ -479,12 +483,24 @@ def test_execute_text_falls_back_to_medium_reasoning_effort(
     monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
     client = CodexClient(_make_config())
 
-    output = client.execute_text("prompt", reasoning_effort="INVALID")
+    with pytest.raises(CodexExecutionError, match="Invalid reasoning effort 'INVALID'"):
+        client.execute_text("prompt", reasoning_effort="INVALID")
+
+
+def test_execute_text_passes_xhigh_reasoning_effort_to_codex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_fake_codex()
+    _FakeCodex.thread = _FakeThread([_FakeStream(iter([_turn_completed()]), final_text="ok")])
+    monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
+    client = CodexClient(_make_config())
+
+    output = client.execute_text("prompt", reasoning_effort="x-high")
 
     assert output == "ok"
     turn_options = _FakeCodex.thread.calls[0].turn_options
     assert turn_options is not None
-    assert _root_value(turn_options.effort) == "medium"
+    assert _root_value(turn_options.effort) == "xhigh"
 
 
 def test_execute_text_uses_config_api_key_not_environment(

@@ -30,37 +30,51 @@ jobs:
         with:
           mode: review
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-          model: gpt-5.4
-          reasoning_effort: medium
+          model: gpt-5.6-terra
+          reasoning_effort: low
           debug_level: 1
 
-  act:
-    name: Act on /codex comments
+  comment-review:
+    name: Review on /codex review comments
     if: >-
       (
         (
           github.event_name == 'issue_comment' &&
-          startsWith(github.event.comment.body, '/codex') &&
+          startsWith(github.event.comment.body, '/codex review') &&
           github.event.issue.pull_request
         ) || (
           github.event_name == 'pull_request_review_comment' &&
-          startsWith(github.event.comment.body, '/codex')
+          startsWith(github.event.comment.body, '/codex review')
         )
       ) &&
       github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
       issues: write
     steps:
+      - name: Verify same-repository PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          head_repository=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name')
+          if [[ "$head_repository" != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::Comment-triggered reviews are limited to same-repository pull requests"
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Codex autonomous edits
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
+      - name: Codex comment-triggered review
         uses: ./
         with:
-          mode: act
+          mode: review
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-          model: gpt-5.4
+          model: gpt-5.6-terra
+          reasoning_effort: low
+          web_search_mode: disabled
+          dry_run: 1
           debug_level: 1

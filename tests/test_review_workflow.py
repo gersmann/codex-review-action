@@ -914,6 +914,63 @@ def test_process_review_resumes_prior_thread_with_inline_incremental_diff(
     assert "FULL PR PROMPT" not in codex_client.calls[0]["prompt"]
 
 
+def test_process_review_with_comment_overrides_forces_fresh_full_review(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src.py").write_text("value = 2\n", encoding="utf-8")
+    prior_summary = _FakeIssueComment(
+        (f"{SUMMARY_MARKER}\n{render_review_summary_metadata('head-sha')}\nold summary"),
+        comment_id=10,
+        login="reviewer",
+    )
+    codex_client = _FakeCodexClient(
+        json.dumps(
+            {
+                "overall_correctness": "patch is correct",
+                "overall_explanation": "",
+                "overall_confidence_score": None,
+                "carried_forward": [],
+                "findings": [],
+            }
+        )
+    )
+    config = _make_config(tmp_path)
+    config.force_fresh_review = True
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, _FakeGitHubClient(_FakePR(issue_comments=[prior_summary]))),
+        codex_client=cast(Any, codex_client),
+    )
+
+    monkeypatch.setattr(
+        workflow.context_manager,
+        "write_context_artifacts",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.compose_prompt",
+        lambda *args, **kwargs: "FULL PR PROMPT",
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_post_results",
+        lambda *args, **kwargs: ReviewPostingOutcome.empty(0),
+    )
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.git_is_ancestor",
+        lambda *args: (_ for _ in ()).throw(AssertionError("must not resolve resume state")),
+    )
+    monkeypatch.setenv("CODEX_REVIEW_PREVIOUS_HEAD_SHA", "head-sha")
+    monkeypatch.setenv("CODEX_REVIEW_CACHE_HIT", "true")
+
+    workflow.process_review(7)
+
+    assert codex_client.calls[0]["resume_thread_id"] is None
+    assert "FULL PR PROMPT" in codex_client.calls[0]["prompt"]
+    assert "<review_resume_context>" not in codex_client.calls[0]["prompt"]
+
+
 def test_process_review_falls_back_to_fresh_review_when_prior_sha_is_not_ancestor(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

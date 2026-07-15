@@ -19,6 +19,7 @@ _CONFIG_OVERRIDE_KEYS = frozenset(
         "openai_api_key",
         "model_name",
         "reasoning_effort",
+        "force_fresh_review",
         "web_search_mode",
         "act_instructions",
         "debug_level",
@@ -55,6 +56,7 @@ class _ReviewConfigValues(TypedDict):
     openai_api_key: str
     model_name: str
     reasoning_effort: str
+    force_fresh_review: bool
     web_search_mode: str
     act_instructions: str
     debug_level: int
@@ -78,6 +80,7 @@ class ReviewConfig:
     openai_api_key: str = ""
     model_name: str = "gpt-5.4"
     reasoning_effort: str = "medium"
+    force_fresh_review: bool = False
     web_search_mode: str = "live"
     act_instructions: str = ""
     debug_level: int = 0
@@ -284,6 +287,7 @@ def _config_values_from_environment() -> _ReviewConfigValues:
         "openai_api_key": openai_api_key,
         "model_name": os.environ.get("CODEX_MODEL", "gpt-5.4").strip(),
         "reasoning_effort": os.environ.get("CODEX_REASONING_EFFORT", "medium").strip(),
+        "force_fresh_review": False,
         "web_search_mode": os.environ.get("CODEX_WEB_SEARCH_MODE", "live").strip(),
         "act_instructions": os.environ.get("CODEX_ACT_INSTRUCTIONS", "").strip(),
         "debug_level": _parse_debug_level(os.environ.get("DEBUG_CODEREVIEW", "0")),
@@ -330,6 +334,10 @@ def _apply_config_overrides(values: _ReviewConfigValues, kwargs: Mapping[str, An
     reasoning_effort = kwargs.get("reasoning_effort")
     if reasoning_effort is not None:
         values["reasoning_effort"] = reasoning_effort
+
+    force_fresh_review = kwargs.get("force_fresh_review")
+    if force_fresh_review is not None:
+        values["force_fresh_review"] = force_fresh_review
 
     web_search_mode = kwargs.get("web_search_mode")
     if web_search_mode is not None:

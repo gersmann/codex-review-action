@@ -215,6 +215,10 @@ class ReviewWorkflow:
         *,
         head_sha: str,
     ) -> _ReviewResumeState | None:
+        if self.config.force_fresh_review:
+            self._debug(1, "Review overrides requested; starting a fresh full review")
+            return None
+
         previous_reviewed_sha = os.environ.get("CODEX_REVIEW_PREVIOUS_HEAD_SHA")
         if previous_reviewed_sha is not None:
             previous_reviewed_sha = previous_reviewed_sha.strip() or None

@@ -15,6 +15,7 @@ def test_event_debugger_emits_agent_message_completion_summary() -> None:
         {
             "method": "item/completed",
             "params": {
+                "completedAtMs": 0,
                 "threadId": "thread-1",
                 "turnId": "turn-1",
                 "item": {"id": "m1", "type": "agentMessage", "text": "ok"},

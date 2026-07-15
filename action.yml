@@ -1,5 +1,5 @@
-name: "Codex Code Review & Actor"
-description: "Run Codex to review a PR and post review comments"
+name: "Codex Code Review"
+description: "Run Codex to review a pull request and post review comments"
 author: "OpenAI Codex"
 branding:
   icon: "search"
@@ -7,7 +7,7 @@ branding:
 
 inputs:
   mode:
-    description: "Operation mode: review | act"
+    description: "Operation mode: review"
     required: false
     default: "review"
   openai_api_key:
@@ -18,7 +18,7 @@ inputs:
     required: false
     default: "gpt-5.4"
   reasoning_effort:
-    description: "Reasoning effort: minimal | low | medium | high"
+    description: "Reasoning effort: none | minimal | low | medium | high | xhigh | max"
     required: false
     default: "medium"
   web_search_mode:
@@ -37,12 +37,8 @@ inputs:
     description: "If '1', stream model output to logs"
     required: false
     default: "1"
-  act_instructions:
-    description: "Additional instructions for act mode (autonomous editing)"
-    required: false
-    default: ""
   allowed_commenter_associations:
-    description: "Comma-separated GitHub comment author_association values allowed to trigger act mode"
+    description: "Comma-separated GitHub comment author_association values allowed to trigger reviews"
     required: false
     default: "MEMBER,OWNER,COLLABORATOR"
   additional_prompt:
@@ -59,17 +55,16 @@ runs:
   steps:
     - name: Validate inputs
       shell: bash
+      env:
+        CODEX_REASONING_EFFORT_INPUT: ${{ inputs.reasoning_effort }}
       run: |
         set -euo pipefail
-        valid_efforts="minimal low medium high"
         valid_search_modes="disabled cached live"
         contains_word() { case " $1 " in *" $2 "*) return 0;; *) return 1;; esac; }
         # Mode
-        case "${{ inputs.mode }}" in review|act) :;; *) echo "::error::Invalid mode: ${{ inputs.mode }} (allowed: review|act)"; exit 2;; esac
+        case "${{ inputs.mode }}" in review) :;; *) echo "::error::Invalid mode: ${{ inputs.mode }} (allowed: review)"; exit 2;; esac
         # Reasoning efforts
-        if ! contains_word "$valid_efforts" "${{ inputs.reasoning_effort }}"; then
-          echo "::error::Invalid reasoning_effort: ${{ inputs.reasoning_effort }} (allowed: minimal|low|medium|high)"; exit 2;
-        fi
+        PYTHONPATH="${{ github.action_path }}:${PYTHONPATH:-}" python3 -m cli.core.reasoning_effort
         # Web search mode
         if ! contains_word "$valid_search_modes" "${{ inputs.web_search_mode }}"; then
           echo "::error::Invalid web_search_mode: ${{ inputs.web_search_mode }} (allowed: disabled|cached|live)"; exit 2;
@@ -104,7 +99,7 @@ runs:
         python3 -m pip install --upgrade pip
         python3 -m pip install ${{ inputs.extra_pip_args }} -r "${{ github.action_path }}/requirements.txt"
 
-    - name: Run Codex autonomous review (CLI)
+    - name: Run Codex review (CLI)
       id: run_codex_cli
       shell: bash
       env:
@@ -116,7 +111,6 @@ runs:
         CODEX_MODEL: ${{ inputs.model }}
         CODEX_REASONING_EFFORT: ${{ inputs.reasoning_effort }}
         CODEX_WEB_SEARCH_MODE: ${{ inputs.web_search_mode }}
-        CODEX_ACT_INSTRUCTIONS: ${{ inputs.act_instructions }}
         CODEX_ALLOWED_COMMENTER_ASSOCIATIONS: ${{ inputs.allowed_commenter_associations }}
         CODEX_ADDITIONAL_PROMPT: ${{ inputs.additional_prompt }}
         DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
