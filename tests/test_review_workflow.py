@@ -228,7 +228,6 @@ def _make_config(tmp_path: Path, *, dry_run: bool = False) -> ReviewConfig:
         github_token="token",
         repository="owner/repo",
         pr_number=7,
-        mode="review",
         dry_run=dry_run,
         repo_root=tmp_path,
     )
@@ -670,20 +669,20 @@ def test_process_review_matches_github_bot_logins_across_issue_and_thread_apis(
         "  using: composite\n"
         "  steps:\n"
         "    - name: Save review Codex cache\n"
-        "      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' && !(steps.review_codex_cache.outputs.cache-hit == 'true' && steps.review_resume_state.outputs.restore_key == steps.review_resume_state.outputs.current_cache_key) }}\n"
+        "      if: ${{ github.event_name == 'pull_request' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' && !(steps.review_codex_cache.outputs.cache-hit == 'true' && steps.review_resume_state.outputs.restore_key == steps.review_resume_state.outputs.current_cache_key) }}\n"
         "      uses: actions/cache/save@v4\n",
         encoding="utf-8",
     )
     stale_body = (
         "**Current code:**\n```yaml\n"
         "    - name: Save review Codex cache\n"
-        "      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' }}\n"
+        "      if: ${{ steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' }}\n"
         "      uses: actions/cache/save@v4\n"
         "```\n\n"
         "**Problem:** stale.\n\n"
         "**Fix:**\n```yaml\n"
         "    - name: Save review Codex cache\n"
-        "      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' && !(steps.review_codex_cache.outputs.cache-hit == 'true' && steps.review_resume_state.outputs.restore_key == steps.review_resume_state.outputs.current_cache_key) }}\n"
+        "      if: ${{ github.event_name == 'pull_request' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' && !(steps.review_codex_cache.outputs.cache-hit == 'true' && steps.review_resume_state.outputs.restore_key == steps.review_resume_state.outputs.current_cache_key) }}\n"
         "      uses: actions/cache/save@v4\n"
         "```\n\n---"
     )

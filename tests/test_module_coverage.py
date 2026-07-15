@@ -12,7 +12,6 @@ from cli.core.exceptions import ReviewContractError
 from cli.core.filesystem import write_text_atomic
 from cli.core.github_types import IssueCommentLikeProtocol, ReviewCommentLikeProtocol
 from cli.core.models import (
-    CommentContext,
     FindingLocation,
     InlineCommentPayload,
     PriorCodexReviewComment,
@@ -21,7 +20,7 @@ from cli.core.models import (
     ReviewThreadComment,
     ReviewThreadSnapshot,
 )
-from cli.main import extract_edit_command, load_github_event
+from cli.main import extract_codex_command, load_github_event
 from cli.review.anchor_engine import RangeAnchor, build_anchor_maps, resolve_range
 from cli.review.artifacts import ReviewArtifacts
 from cli.review.context_manager import ReviewContextWriter
@@ -43,7 +42,6 @@ from cli.review.posting import (
     persist_anchor_maps,
     post_inline_comments,
 )
-from cli.workflows.edit_workflow import EditWorkflow, _format_edit_reply
 
 
 class _FakeChangedFile:
@@ -147,12 +145,6 @@ class _FakePR:
         return list(self._review_comments)
 
 
-def _make_edit_workflow() -> EditWorkflow:
-    from cli.core.config import ReviewConfig
-
-    return EditWorkflow(ReviewConfig(github_token="t", repository="o/r", pr_number=1, mode="act"))
-
-
 def test_patch_parser_and_anchor_engine_cover_common_cases(tmp_path: Path) -> None:
     patch = "@@ -1,2 +1,3 @@\n line1\n-line2\n+line2 changed\n+line3\n"
     parsed = parse_patch(patch)
@@ -209,9 +201,6 @@ def test_write_text_atomic_overwrites_and_creates_parent_dirs(tmp_path: Path) ->
 
 
 def test_model_helpers_parse_and_normalize_payloads() -> None:
-    assert CommentContext.from_mapping(None) is None
-    assert CommentContext.from_mapping({"id": "bad", "event_name": 1, "author": None}) is None
-
     finding = {
         "code_location": {
             "absolute_file_path": " /tmp/a.py ",
@@ -618,7 +607,7 @@ def test_review_posting_helpers_write_and_post(tmp_path: Path) -> None:
     assert any("DRY_RUN: would POST /comments" in message for message in debug_messages)
 
 
-def test_github_client_helpers_cover_normalization_and_replies(
+def test_github_client_helpers_cover_normalization_and_posting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     page = _extract_review_threads_page(
@@ -667,42 +656,18 @@ def test_github_client_helpers_cover_normalization_and_replies(
     assert _normalize_comment({"id": "comment-2", "body": "text", "path": ""}) is None
     assert _normalize_comment({"id": "", "body": "text", "path": "sample.py"}) is None
 
-    pr = _FakePR()
     client = GitHubClient(ReviewConfig(github_token="t", repository="o/r"))
-    client.reply_to_review_comment(cast(Any, pr), 12, "reply body")
-    assert pr._requester.calls[0][1].endswith("/comments/12/replies")
 
     def _boom_request(*args: object, **kwargs: object) -> None:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(client, "_post_pr_resource", _boom_request)
-    with pytest.raises(Exception, match="failed replying to review comment 1"):
-        client.reply_to_review_comment(cast(Any, _FakePR()), 1, "text")
-
-    class _BrokenIssue(_FakeIssue):
-        def create_comment(self, text: str) -> None:  # noqa: ARG002
-            raise RuntimeError("boom")
-
-    class _IssueFailPR(_FakePR):
-        def as_issue(self) -> _BrokenIssue:
-            return _BrokenIssue()
-
-    with pytest.raises(Exception, match="failed posting issue comment on PR #1"):
-        client.post_issue_comment(cast(Any, _IssueFailPR()), "text")
     with pytest.raises(Exception, match="failed to post inline comment on PR #1"):
         client.post_inline_comment(
             cast(Any, _FakePR()),
             InlineCommentPayload(body="text", path="sample.py", line=1),
             head_sha="deadbeef",
         )
-    assert CommentContext.from_mapping(
-        {"id": "7", "event_name": "issue_comment"}
-    ) == CommentContext(
-        id=7,
-        event_name="issue_comment",
-        author="",
-        body="",
-    )
 
 
 def test_github_client_wraps_repo_and_pr_load_failures(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -728,12 +693,12 @@ def test_github_client_wraps_repo_and_pr_load_failures(monkeypatch: pytest.Monke
 def test_main_helpers_cover_commands_and_event_loading(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    assert extract_edit_command("/codex fix this") == "fix this"
-    assert extract_edit_command("/codex: fix this") == "fix this"
-    assert extract_edit_command("/codex") is None
-    assert extract_edit_command("/codex:") is None
-    assert extract_edit_command("/codexify fix this") is None
-    assert extract_edit_command("not a command") is None
+    assert extract_codex_command("/codex review") == "review"
+    assert extract_codex_command("/codex: review") == "review"
+    assert extract_codex_command("/codex") is None
+    assert extract_codex_command("/codex:") is None
+    assert extract_codex_command("/codexify review") is None
+    assert extract_codex_command("not a command") is None
 
     good_event = tmp_path / "event.json"
     good_event.write_text(json.dumps({"pull_request": {"number": 1}}), encoding="utf-8")
@@ -759,19 +724,3 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
     assert "model: gpt-5.6-luna" in workflow_yaml
     assert "reasoning_effort: high" in workflow_yaml
     assert "model: gpt-5.1-codex-max" not in workflow_yaml
-
-
-def test_edit_workflow_helpers_cover_reply_formatting_and_context_normalization() -> None:
-    truncated = _format_edit_reply("x" * 3605, pushed=False, dry_run=False, changed=True)
-    assert "not pushed" in truncated
-    assert "… (truncated)" in truncated
-
-    assert CommentContext.from_mapping(None) is None
-    assert CommentContext.from_mapping(
-        {"id": "9", "event_name": "issue_comment"}
-    ) == CommentContext(
-        id=9,
-        event_name="issue_comment",
-        author="",
-        body="",
-    )

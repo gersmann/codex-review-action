@@ -15,9 +15,14 @@ from cli.workflows.review_workflow import (
 )
 
 
-def test_parser_defaults_to_luna_with_high_reasoning() -> None:
-    args = main_module.create_parser().parse_args([])
+def test_parser_is_review_only_with_luna_high_defaults() -> None:
+    parser = main_module.create_parser()
+    destinations = {action.dest for action in parser._actions}
 
+    assert "mode" not in destinations
+    assert "act_instructions" not in destinations
+
+    args = parser.parse_args(["--repo", "owner/repo", "--pr", "17"])
     assert args.model_name == "gpt-5.6-luna"
     assert args.reasoning_effort == "high"
 
@@ -98,7 +103,6 @@ def test_main_noops_for_non_codex_comment_event(monkeypatch, tmp_path) -> None:
             raise AssertionError("workflow must not be instantiated for non-command comment")
 
     monkeypatch.setattr(main_module, "ReviewWorkflow", _UnexpectedWorkflow)
-    monkeypatch.setattr(main_module, "EditWorkflow", _UnexpectedWorkflow)
     monkeypatch.setattr(sys, "argv", ["codex-review"])
 
     rc = main_module.main()
@@ -131,7 +135,6 @@ def test_main_noops_for_bare_codex_comment(monkeypatch, tmp_path) -> None:
             raise AssertionError("workflow must not be instantiated for a bare command")
 
     monkeypatch.setattr(main_module, "ReviewWorkflow", _UnexpectedWorkflow)
-    monkeypatch.setattr(main_module, "EditWorkflow", _UnexpectedWorkflow)
     monkeypatch.setattr(sys, "argv", ["codex-review"])
 
     rc = main_module.main()
@@ -158,14 +161,12 @@ def test_main_noops_for_unauthorized_codex_review_comment(monkeypatch, tmp_path,
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issue_comment")
-    monkeypatch.setenv("CODEX_MODE", "review")
 
     class _UnexpectedWorkflow:
         def __init__(self, config):  # noqa: ARG002
             raise AssertionError("workflow must not be instantiated for an unauthorized command")
 
     monkeypatch.setattr(main_module, "ReviewWorkflow", _UnexpectedWorkflow)
-    monkeypatch.setattr(main_module, "EditWorkflow", _UnexpectedWorkflow)
     monkeypatch.setattr(sys, "argv", ["codex-review"])
 
     rc = main_module.main()
@@ -193,13 +194,11 @@ def test_main_rejects_invalid_review_reasoning_override(monkeypatch, tmp_path, c
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issue_comment")
-    monkeypatch.setenv("CODEX_MODE", "review")
 
     class _UnexpectedWorkflow:
         def __init__(self, config):  # noqa: ARG002
             raise AssertionError("workflows must not run for an invalid override")
 
-    monkeypatch.setattr(main_module, "EditWorkflow", _UnexpectedWorkflow)
     monkeypatch.setattr(main_module, "ReviewWorkflow", _UnexpectedWorkflow)
     monkeypatch.setattr(sys, "argv", ["codex-review"])
 
@@ -259,7 +258,6 @@ def test_main_runs_review_workflow_with_comment_overrides(monkeypatch, tmp_path,
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issue_comment")
-    monkeypatch.setenv("CODEX_MODE", "review")
 
     events: list[str] = []
 
@@ -278,7 +276,6 @@ def test_main_runs_review_workflow_with_comment_overrides(monkeypatch, tmp_path,
         def __init__(self, config):
             assert events == ["acknowledged"]
             assert config.allowed_commenter_associations == ("MEMBER", "OWNER", "COLLABORATOR")
-            assert config.mode == "review"
             assert config.pr_number == 17
             assert config.reasoning_effort == "xhigh"
             assert config.model_name == "gpt-5.6-sol"
@@ -288,11 +285,6 @@ def test_main_runs_review_workflow_with_comment_overrides(monkeypatch, tmp_path,
             assert pr_number == 17
             return _make_review_result(findings_count=1)
 
-    class _UnexpectedEditWorkflow:
-        def __init__(self, config):  # noqa: ARG002
-            raise AssertionError("review comments must never run EditWorkflow")
-
-    monkeypatch.setattr(main_module, "EditWorkflow", _UnexpectedEditWorkflow)
     monkeypatch.setattr(main_module, "GitHubClient", _GitHubClient)
     monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
     monkeypatch.setattr(sys, "argv", ["codex-review"])
@@ -324,13 +316,11 @@ def test_main_noops_for_bare_codex_instructions_as_review_only(
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issue_comment")
-    monkeypatch.setenv("CODEX_MODE", "act")
 
     class _UnexpectedWorkflow:
         def __init__(self, config):  # noqa: ARG002
             raise AssertionError("review-only comment handling must not run a workflow")
 
-    monkeypatch.setattr(main_module, "EditWorkflow", _UnexpectedWorkflow)
     monkeypatch.setattr(main_module, "ReviewWorkflow", _UnexpectedWorkflow)
     monkeypatch.setattr(sys, "argv", ["codex-review"])
 
@@ -359,9 +349,8 @@ def test_main_runs_review_workflow_with_comment_defaults(monkeypatch, tmp_path) 
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request_review_comment")
-    monkeypatch.setenv("CODEX_MODE", "review")
-    monkeypatch.setenv("CODEX_MODEL", "gpt-5.6-terra")
-    monkeypatch.setenv("CODEX_REASONING_EFFORT", "low")
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.delenv("CODEX_REASONING_EFFORT", raising=False)
 
     events: list[str] = []
 
@@ -380,15 +369,14 @@ def test_main_runs_review_workflow_with_comment_defaults(monkeypatch, tmp_path) 
         def __init__(self, config):
             assert events == ["acknowledged"]
             assert config.pr_number == 19
-            assert config.model_name == "gpt-5.6-terra"
-            assert config.reasoning_effort == "low"
+            assert config.model_name == "gpt-5.6-luna"
+            assert config.reasoning_effort == "high"
             assert config.force_fresh_review is False
 
         def process_review(self, pr_number: int) -> ReviewWorkflowResult:
             assert pr_number == 19
             return _make_review_result(findings_count=0)
 
-    monkeypatch.setattr(main_module, "EditWorkflow", object)
     monkeypatch.setattr(main_module, "GitHubClient", _GitHubClient)
     monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
     monkeypatch.setattr(sys, "argv", ["codex-review"])
@@ -411,7 +399,6 @@ def test_main_runs_review_workflow_for_actions_pr_event(monkeypatch, tmp_path, c
 
     class _Workflow:
         def __init__(self, config):
-            assert config.mode == "review"
             assert config.pr_number == 17
 
         def process_review(self, pr_number: int) -> ReviewWorkflowResult:
@@ -419,7 +406,6 @@ def test_main_runs_review_workflow_for_actions_pr_event(monkeypatch, tmp_path, c
             return _make_review_result(findings_count=1)
 
     monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
-    monkeypatch.setattr(main_module, "EditWorkflow", object)
     monkeypatch.setattr(sys, "argv", ["codex-review"])
 
     rc = main_module.main()
@@ -428,7 +414,7 @@ def test_main_runs_review_workflow_for_actions_pr_event(monkeypatch, tmp_path, c
     assert "Review completed: patch is incorrect, 1 findings" in capsys.readouterr().out
 
 
-def test_main_runs_review_workflow_in_review_mode(monkeypatch, capsys) -> None:
+def test_main_runs_review_workflow(monkeypatch, capsys) -> None:
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
@@ -436,7 +422,6 @@ def test_main_runs_review_workflow_in_review_mode(monkeypatch, capsys) -> None:
 
     class _Workflow:
         def __init__(self, config):
-            assert config.mode == "review"
             assert config.pr_number == 17
 
         def process_review(self, pr_number: int) -> ReviewWorkflowResult:
@@ -444,11 +429,10 @@ def test_main_runs_review_workflow_in_review_mode(monkeypatch, capsys) -> None:
             return _make_review_result(findings_count=2)
 
     monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
-    monkeypatch.setattr(main_module, "EditWorkflow", object)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["codex-review", "--repo", "owner/repo", "--pr", "17", "--mode", "review"],
+        ["codex-review", "--repo", "owner/repo", "--pr", "17"],
     )
 
     rc = main_module.main()
@@ -474,11 +458,10 @@ def test_main_runs_review_workflow_with_cli_repo_and_env_token_only(monkeypatch,
             return _make_review_result(findings_count=0)
 
     monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
-    monkeypatch.setattr(main_module, "EditWorkflow", object)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["codex-review", "--repo", "owner/repo", "--pr", "19", "--mode", "review"],
+        ["codex-review", "--repo", "owner/repo", "--pr", "19"],
     )
 
     rc = main_module.main()
@@ -495,7 +478,6 @@ def test_main_reports_carried_forward_findings_separately(monkeypatch, capsys) -
 
     class _Workflow:
         def __init__(self, config):
-            assert config.mode == "review"
             assert config.pr_number == 17
 
         def process_review(self, pr_number: int) -> ReviewWorkflowResult:
@@ -503,11 +485,10 @@ def test_main_reports_carried_forward_findings_separately(monkeypatch, capsys) -
             return _make_review_result(findings_count=1, carried_forward_count=2)
 
     monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
-    monkeypatch.setattr(main_module, "EditWorkflow", object)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["codex-review", "--repo", "owner/repo", "--pr", "17", "--mode", "review"],
+        ["codex-review", "--repo", "owner/repo", "--pr", "17"],
     )
 
     rc = main_module.main()
@@ -527,7 +508,6 @@ def test_main_reports_clean_summary_without_resolution_counts(monkeypatch, capsy
 
     class _Workflow:
         def __init__(self, config):
-            assert config.mode == "review"
             assert config.pr_number == 17
 
         def process_review(self, pr_number: int) -> ReviewWorkflowResult:
@@ -535,11 +515,10 @@ def test_main_reports_clean_summary_without_resolution_counts(monkeypatch, capsy
             return _make_review_result(findings_count=0)
 
     monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
-    monkeypatch.setattr(main_module, "EditWorkflow", object)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["codex-review", "--repo", "owner/repo", "--pr", "17", "--mode", "review"],
+        ["codex-review", "--repo", "owner/repo", "--pr", "17"],
     )
 
     rc = main_module.main()
@@ -563,11 +542,10 @@ def test_main_returns_one_for_review_workflow_errors(monkeypatch, capsys) -> Non
             raise CodexReviewError("boom")
 
     monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
-    monkeypatch.setattr(main_module, "EditWorkflow", object)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["codex-review", "--repo", "owner/repo", "--pr", "17", "--mode", "review"],
+        ["codex-review", "--repo", "owner/repo", "--pr", "17"],
     )
 
     rc = main_module.main()

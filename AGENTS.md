@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `cli/`: Python source. Entry point `main.py`; config/models in `config.py`, `models.py`, `exceptions.py`; workflows in `workflows/review_workflow.py`, `workflows/edit_workflow.py`; prompts in `review_prompt.py`, `edit_prompt.py`; infrastructure in `codex_client.py`, `github_client.py`, `git_ops.py`; review helpers in `review/dedupe.py`, `review/posting.py`; diff utilities in `patch_parser.py`, `anchor_engine.py`; context in `context_manager.py`.
+- `cli/`: Python source. Entry point `main.py`; config/models in `config.py`, `models.py`, `exceptions.py`; workflow in `workflows/review_workflow.py`; prompt composition in `review/review_prompt.py`; infrastructure in `codex_client.py`, `github_client.py`, `git_ops.py`; review helpers in `review/dedupe.py`, `review/posting.py`; diff utilities in `patch_parser.py`, `anchor_engine.py`; context in `context_manager.py`.
 - `prompts/`: Review guidelines (`review.md`).
 - `action.yml`: Composite GitHub Action definition and inputs.
 - `Makefile`: QA tasks (`fmt`, `lint`, `type`, `qa`).
@@ -9,7 +9,7 @@
 
 ## Build, Test, and Development Commands
 - `make lint` – Ruff lint + autofix.
-- Run locally: `GITHUB_TOKEN=... OPENAI_API_KEY=... PYTHONPATH=. python -m cli.main --repo owner/repo --pr 123 [--mode review|act] [--dry-run] [--debug 1]`.
+- Run locally: `GITHUB_TOKEN=... OPENAI_API_KEY=... PYTHONPATH=. python -m cli.main --repo owner/repo --pr 123 [--dry-run] [--debug 1]`.
 
 ## Coding Style & Naming Conventions
 - Python 3.12, 4‑space indent, `snake_case` for functions/variables, `PascalCase` for classes, constants `UPPER_SNAKE`.
@@ -22,8 +22,22 @@
 - Mock GitHub Actions runs by writing a minimal event JSON and pointing `GITHUB_EVENT_PATH` to it; set `GITHUB_TOKEN` and `OPENAI_API_KEY` to test tokens.
 
 ## Commit & Pull Request Guidelines
-- Use Conventional Commits (e.g., `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`) as seen in history.
-- PRs: describe the what/why, link issues, include before/after output (CLI logs or posted comments). Update docs if flags/inputs change.
+- Never commit directly to `main`.
+- Commit subjects use imperative mood ("Add X", not "Added/Adds"), are
+  capitalized, have no trailing period, are at most 50 characters, and have no
+  prefixes such as `feat:` or `fix:`.
+- Commit bodies are separated from the subject by a blank line, wrapped at 72
+  characters, and explain what changed and why rather than how. Skip the body
+  when the subject is self-explanatory.
+- Keep one logical change per commit. If the subject needs "and", split it.
+- Use a concise, imperative PR title that describes the outcome rather than a
+  category of work or a mechanical list of files changed.
+- PR summaries explain the motivation and impact: why the change was made and
+  what it enables. Do not mechanically list changes already visible in the
+  diff.
+- Do not include a "Test Plan" section.
+- Add screenshots, sample payloads, or before/after output when changes affect
+  external integrations or responses. Update docs if flags or inputs change.
 - Pre-submit: `make qa` must pass; keep diffs minimal and scoped.
 
 ## Security & Configuration Tips

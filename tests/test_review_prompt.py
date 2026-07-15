@@ -11,7 +11,6 @@ def _make_review_config() -> ReviewConfig:
     return ReviewConfig(
         github_token="token",
         repository="owner/repo",
-        mode="review",
     )
 
 

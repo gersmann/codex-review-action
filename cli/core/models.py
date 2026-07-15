@@ -11,32 +11,6 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class CommentContext:
-    """Context for comment-triggered edit commands."""
-
-    id: int
-    event_name: str
-    author: str = ""
-    body: str = ""
-
-    @classmethod
-    def from_mapping(cls, payload: Mapping[str, Any] | None) -> CommentContext | None:
-        if payload is None:
-            return None
-        try:
-            comment_id = int(payload.get("id") or 0)
-        except (TypeError, ValueError):
-            return None
-
-        event_name = str(payload.get("event_name") or "")
-        if comment_id <= 0 or not event_name:
-            return None
-        author = str(payload.get("author") or "")
-        body = str(payload.get("body") or "")
-        return cls(id=comment_id, event_name=event_name, author=author, body=body)
-
-
-@dataclass(frozen=True)
 class FindingLocation:
     """Normalized finding location values parsed from model output."""
 
@@ -257,30 +231,6 @@ class ReviewThreadSnapshot:
     id: str
     is_resolved: bool
     comments: list[ReviewThreadComment]
-
-
-@dataclass(frozen=True)
-class UnresolvedReviewComment:
-    """Normalized review-comment context for unresolved thread prompts."""
-
-    id: str
-    body: str
-    path: str
-    line: int | None
-    original_line: int | None
-    author: str = ""
-
-    @property
-    def prompt_line(self) -> int | None:
-        return self.line if self.line is not None else self.original_line
-
-
-@dataclass(frozen=True)
-class UnresolvedReviewThread:
-    """Normalized unresolved review thread used by edit mode."""
-
-    id: str
-    comments: list[UnresolvedReviewComment]
 
 
 @dataclass(frozen=True)

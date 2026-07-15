@@ -17,9 +17,6 @@ class ReviewPromptPullRequestProtocol(Protocol):
 
 
 def load_guidelines(config: ReviewConfig) -> str:
-    if config.mode != "review":
-        return ""
-
     debug = make_debug(config)
     builtin_path = Path(__file__).resolve().parents[2] / "prompts" / "review.md"
 
