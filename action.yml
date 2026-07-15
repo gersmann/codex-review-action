@@ -14,13 +14,13 @@ inputs:
     description: "OpenAI API key for the selected model provider"
     required: false
   model:
-    description: "Model to use (e.g., gpt-5, gpt-4.1-mini)"
+    description: "Review model: gpt-5.6-luna | gpt-5.6-terra | gpt-5.6-sol"
     required: false
-    default: "gpt-5.4"
+    default: "gpt-5.6-luna"
   reasoning_effort:
     description: "Reasoning effort: none | minimal | low | medium | high | xhigh | max"
     required: false
-    default: "medium"
+    default: "high"
   web_search_mode:
     description: "Web search mode: disabled | cached | live"
     required: false
@@ -60,9 +60,14 @@ runs:
       run: |
         set -euo pipefail
         valid_search_modes="disabled cached live"
+        valid_models="gpt-5.6-luna gpt-5.6-terra gpt-5.6-sol"
         contains_word() { case " $1 " in *" $2 "*) return 0;; *) return 1;; esac; }
         # Mode
         case "${{ inputs.mode }}" in review) :;; *) echo "::error::Invalid mode: ${{ inputs.mode }} (allowed: review)"; exit 2;; esac
+        # Model
+        if ! contains_word "$valid_models" "${{ inputs.model }}"; then
+          echo "::error::Invalid model: ${{ inputs.model }} (allowed: $valid_models)"; exit 2;
+        fi
         # Reasoning efforts
         PYTHONPATH="${{ github.action_path }}:${PYTHONPATH:-}" python3 -m cli.core.reasoning_effort
         # Web search mode

@@ -8,7 +8,9 @@ Run Codex to review pull requests when a trusted user requests one with a
 
 ## Quick Start
 
-When a trusted user comments `/codex review` on a PR, the action runs another review. Optional leading `reasoning:` and `model:` tokens override that run's defaults.
+When a trusted user comments `/codex review` on a PR, the action reacts with a
+rocket, replies that the review is queued, and runs the review. Optional
+`reasoning:` and `model:` tokens override that run's defaults.
 
 ```yaml
 name: Codex Comment Review
@@ -78,8 +80,8 @@ jobs:
 | `openai_api_key` | OpenAI API key | *required* |
 | `mode` | `review` | `review` |
 | **Model** | | |
-| `model` | Model name | `gpt-5.4` |
-| `reasoning_effort` | `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` (`x-high` is accepted as an alias) | `medium` |
+| `model` | `gpt-5.6-luna` / `gpt-5.6-terra` / `gpt-5.6-sol` | `gpt-5.6-luna` |
+| `reasoning_effort` | `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` (`x-high` is accepted as an alias) | `high` |
 | **Review-only** | | |
 | `additional_prompt` | Extra reviewer instructions (verbatim) | |
 | `allowed_commenter_associations` | Comma-separated GitHub `author_association` values allowed to trigger comment reviews | `MEMBER,OWNER,COLLABORATOR` |
@@ -92,6 +94,8 @@ jobs:
 
 ## What It Posts
 
+- **Request acknowledgment** as a rocket reaction and a short queued reply. An
+  inline request receives an inline reply; a PR comment receives a PR comment.
 - **Inline comments** anchored to exact diff lines. If a line isn't in the current diff, the finding is skipped.
 - **PR-level summary** as an issue comment on each run (refreshed on re-runs; prior summaries are deleted).
 - **Multi-line suggestions** only when contiguous and short; otherwise a single-line comment.

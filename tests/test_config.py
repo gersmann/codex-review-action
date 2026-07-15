@@ -27,6 +27,50 @@ def test_from_args_overrides_known_values_without_environment() -> None:
     assert config.debug_level == 2
 
 
+def test_review_defaults_to_luna_with_high_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.delenv("CODEX_REASONING_EFFORT", raising=False)
+
+    config = ReviewConfig.from_args(
+        github_token="token",
+        repository="owner/repo",
+        pr_number=1,
+        openai_api_key="test-key",
+    )
+
+    assert config.model_name == "gpt-5.6-luna"
+    assert config.reasoning_effort == "high"
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"],
+)
+def test_review_accepts_priced_models(model_name: str) -> None:
+    config = ReviewConfig.from_args(
+        github_token="token",
+        repository="owner/repo",
+        pr_number=1,
+        openai_api_key="test-key",
+        model_name=model_name,
+    )
+
+    assert config.model_name == model_name
+
+
+def test_review_rejects_unpriced_models() -> None:
+    with pytest.raises(ConfigurationError, match="Unsupported review model"):
+        ReviewConfig.from_args(
+            github_token="token",
+            repository="owner/repo",
+            pr_number=1,
+            openai_api_key="test-key",
+            model_name="gpt-5.4",
+        )
+
+
 def test_from_args_merges_cli_values_with_partial_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

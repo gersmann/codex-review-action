@@ -38,3 +38,11 @@ def test_comment_reviews_do_not_restore_or_save_review_cache() -> None:
     save_step = action[action.index("    - name: Save review Codex cache") :]
     save_condition = save_step.splitlines()[1]
     assert "github.event_name == 'pull_request'" in save_condition
+
+
+def test_action_defaults_to_luna_with_high_reasoning() -> None:
+    action = (ROOT / "action.yml").read_text(encoding="utf-8")
+
+    assert 'default: "gpt-5.6-luna"' in action
+    assert 'default: "high"' in action
+    assert "gpt-5.6-luna gpt-5.6-terra gpt-5.6-sol" in action

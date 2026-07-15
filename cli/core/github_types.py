@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Any, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol, runtime_checkable
+
+
+@dataclass(frozen=True)
+class ReviewRequestContext:
+    comment_id: int
+    commenter_login: str
+    event_name: Literal["issue_comment", "pull_request_review_comment"]
 
 
 @runtime_checkable

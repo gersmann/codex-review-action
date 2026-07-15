@@ -11,6 +11,7 @@ from ..core.exceptions import GitHubAPIError
 from ..core.github_types import (
     PullRequestLikeProtocol,
     RepositoryLikeProtocol,
+    ReviewRequestContext,
     StatusCodeErrorProtocol,
 )
 from ..core.models import (
@@ -44,6 +45,11 @@ class GitHubClientProtocol(Protocol):
         text: str,
     ) -> None: ...
     def post_issue_comment(self, pr: PullRequestLikeProtocol, text: str) -> None: ...
+    def acknowledge_review_request(
+        self,
+        pr_number: int,
+        request: ReviewRequestContext,
+    ) -> None: ...
 
 
 class GitHubClient:
@@ -168,6 +174,36 @@ class GitHubClient:
         except Exception as exc:
             raise _wrap_github_error(
                 f"failed posting issue comment on PR #{pr.number}",
+                exc,
+            ) from exc
+
+    def acknowledge_review_request(
+        self,
+        pr_number: int,
+        request: ReviewRequestContext,
+    ) -> None:
+        pr = self.get_pr(pr_number)
+        message = f"@{request.commenter_login}, your Codex review has been queued."
+        try:
+            if request.event_name == "issue_comment":
+                repository_url = pr.url.rsplit("/pulls/", 1)[0]
+                reaction_url = f"{repository_url}/issues/comments/{request.comment_id}/reactions"
+            else:
+                repository_url = pr.url.rsplit("/pulls/", 1)[0]
+                reaction_url = f"{repository_url}/pulls/comments/{request.comment_id}/reactions"
+
+            pr._requester.requestJsonAndCheck(
+                "POST",
+                reaction_url,
+                input={"content": "rocket"},
+            )
+            if request.event_name == "issue_comment":
+                self.post_issue_comment(pr, message)
+            else:
+                self.reply_to_review_comment(pr, request.comment_id, message)
+        except Exception as exc:
+            raise _wrap_github_error(
+                f"failed acknowledging review request on PR #{pr.number}",
                 exc,
             ) from exc
 

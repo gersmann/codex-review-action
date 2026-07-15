@@ -307,7 +307,7 @@ def test_execute_text_streams_agent_message_from_protocol_deltas(
     assert _FakeCodex.last_thread_options.config.web_search == "live"
     turn_options = _FakeCodex.thread.calls[0].turn_options
     assert turn_options is not None
-    assert _root_value(turn_options.effort) == "medium"
+    assert _root_value(turn_options.effort) == "high"
     assert _FakeCodex.last_options.config.show_raw_agent_reasoning is False
 
 
@@ -439,9 +439,9 @@ def test_execute_structured_runs_second_turn_with_schema(
     second_turn_options = _FakeCodex.thread.calls[1].turn_options
     assert first_turn_options is not None
     assert second_turn_options is not None
-    assert _root_value(first_turn_options.effort) == "medium"
+    assert _root_value(first_turn_options.effort) == "high"
     assert _FakeCodex.thread.calls[1].prompt == "Return the JSON now."
-    assert _root_value(second_turn_options.effort) == "medium"
+    assert _root_value(second_turn_options.effort) == "high"
     assert second_turn_options.output_schema == schema
 
 

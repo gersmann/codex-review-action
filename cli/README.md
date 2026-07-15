@@ -93,6 +93,8 @@ When used via the bundled workflow, the CLI runs only after an authorized
 request does not start a review.
 
 Review posting behavior:
+- Codex immediately adds a rocket reaction and a queued reply after authorizing
+  the request.
 - Codex posts a PR-level issue comment with a review summary.
 - Findings are posted as standalone inline PR review comments on the relevant lines.
 
@@ -110,9 +112,9 @@ Comment-triggered reviews
 | `GITHUB_TOKEN` | GitHub API token | *Required* |
 | `OPENAI_API_KEY` | OpenAI API key | *Required for OpenAI* |
 | `CODEX_MODE` | Operation mode (review/act) | `review` |
-| `CODEX_MODEL` | Model name | `gpt-5.4` |
+| `CODEX_MODEL` | `gpt-5.6-luna`, `gpt-5.6-terra`, or `gpt-5.6-sol` | `gpt-5.6-luna` |
 | `CODEX_PROVIDER` | Model provider | `openai` |
-| `CODEX_REASONING_EFFORT` | Reasoning effort level | `medium` |
+| `CODEX_REASONING_EFFORT` | Reasoning effort level | `high` |
 | `CODEX_ACT_INSTRUCTIONS` | Additional instructions for act mode | `` |
 | `CODEX_ALLOWED_COMMENTER_ASSOCIATIONS` | Comma-separated GitHub comment roles allowed to trigger act mode | `MEMBER,OWNER,COLLABORATOR` |
 | `DEBUG_CODEREVIEW` | Debug level (0-2) | `0` |
