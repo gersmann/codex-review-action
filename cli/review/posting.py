@@ -225,9 +225,10 @@ def _render_evidence_marker(
     if start_line < 1 or start_line > len(lines):
         return ""
     snippet = "\n".join(lines[start_line - 1 : end_line]).strip()
-    if not snippet or EVIDENCE_MARKER_CLOSE in snippet:
+    if not snippet:
         return ""
-    return f"\n\n{EVIDENCE_MARKER_OPEN}\n{snippet}\n{EVIDENCE_MARKER_CLOSE}"
+    encoded = snippet.replace("&", "&amp;").replace(EVIDENCE_MARKER_CLOSE, "--&gt;")
+    return f"\n\n{EVIDENCE_MARKER_OPEN}\n{encoded}\n{EVIDENCE_MARKER_CLOSE}"
 
 
 def post_inline_comments(

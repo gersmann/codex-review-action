@@ -29,3 +29,15 @@ def test_extract_prefers_marker_over_legacy_block() -> None:
 
 def test_extract_returns_none_without_evidence() -> None:
     assert _extract_current_code_block("Just a matter-of-fact paragraph.") is None
+
+
+def test_extract_decodes_escaped_comment_terminator() -> None:
+    body = "Paragraph.\n\n<!-- codex-current-code\nif done: print('--&gt;')\n-->"
+
+    assert _extract_current_code_block(body) == "if done: print('-->')"
+
+
+def test_extract_decodes_escaped_ampersand_without_double_unescaping() -> None:
+    body = "Paragraph.\n\n<!-- codex-current-code\na = b --&amp;gt; c\n-->"
+
+    assert _extract_current_code_block(body) == "a = b --&gt; c"

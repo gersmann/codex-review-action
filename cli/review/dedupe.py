@@ -117,8 +117,11 @@ def render_prior_codex_comments_for_prompt(
 
 def _extract_current_code_block(body: str) -> str | None:
     match = _EVIDENCE_MARKER_RE.search(body)
-    if match is None:
-        match = _CURRENT_CODE_BLOCK_RE.search(body)
+    if match is not None:
+        # Reverse the entity escaping applied by posting._render_evidence_marker.
+        current_code = match.group(1).strip().replace("--&gt;", "-->").replace("&amp;", "&")
+        return current_code or None
+    match = _CURRENT_CODE_BLOCK_RE.search(body)
     if match is None:
         return None
     current_code = match.group(1).strip()
