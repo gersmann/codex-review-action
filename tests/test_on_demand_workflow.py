@@ -19,9 +19,12 @@ def test_bundled_workflow_runs_only_requested_reviews() -> None:
     # would start runners for comments like "/reviewer".
     assert "startsWith(github.event.comment.body, '/review')" not in workflow
     assert "startsWith(github.event.comment.body, '/verify')" not in workflow
-    assert "github.event.comment.body == '/review'" in workflow
-    assert "github.event.comment.body == '/verify'" in workflow
-    for command in ("review", "verify", "codex"):
+    # The legacy prefix must be restricted to valid commands so comments like
+    # "/codex status" do not start runners.
+    assert "startsWith(github.event.comment.body, '/codex ')" not in workflow
+    assert "startsWith(github.event.comment.body, '/codex:')" not in workflow
+    for command in ("review", "verify", "codex review", "codex verify"):
+        assert f"github.event.comment.body == '/{command}'" in workflow
         assert f"startsWith(github.event.comment.body, '/{command} ')" in workflow
         assert f"startsWith(github.event.comment.body, '/{command}:')" in workflow
     assert "github.event.issue.pull_request" in workflow

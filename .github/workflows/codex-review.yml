@@ -21,8 +21,12 @@ jobs:
         startsWith(github.event.comment.body, '/review:') ||
         startsWith(github.event.comment.body, '/verify ') ||
         startsWith(github.event.comment.body, '/verify:') ||
-        startsWith(github.event.comment.body, '/codex ') ||
-        startsWith(github.event.comment.body, '/codex:')
+        github.event.comment.body == '/codex review' ||
+        github.event.comment.body == '/codex verify' ||
+        startsWith(github.event.comment.body, '/codex review ') ||
+        startsWith(github.event.comment.body, '/codex review:') ||
+        startsWith(github.event.comment.body, '/codex verify ') ||
+        startsWith(github.event.comment.body, '/codex verify:')
       ) &&
       (
         github.event_name == 'pull_request_review_comment' ||
