@@ -9,6 +9,7 @@ from typing import Any, TypedDict
 
 from .exceptions import ConfigurationError
 from .model_pricing import SUPPORTED_REVIEW_MODELS
+from .reasoning_effort import default_reasoning_effort_for_model
 
 _CONFIG_OVERRIDE_KEYS = frozenset(
     {
@@ -75,7 +76,7 @@ class ReviewConfig:
     model_provider: str = "openai"
     openai_api_key: str = ""
     model_name: str = "gpt-5.6-luna"
-    reasoning_effort: str = "high"
+    reasoning_effort: str = ""
     force_fresh_review: bool = False
     web_search_mode: str = "live"
     debug_level: int = 0
@@ -85,6 +86,12 @@ class ReviewConfig:
     repo_root: Path | None = None
     context_dir_name: str = ".codex-context"
     allowed_commenter_associations: tuple[str, ...] = _DEFAULT_ALLOWED_COMMENTER_ASSOCIATIONS
+
+    def __post_init__(self) -> None:
+        # An empty reasoning effort means "not specified"; resolve the
+        # model-dependent default so every consumer sees the effective value.
+        if not self.reasoning_effort:
+            self.reasoning_effort = default_reasoning_effort_for_model(self.model_name)
 
     @classmethod
     def from_environment(cls) -> ReviewConfig:
@@ -283,7 +290,7 @@ def _config_values_from_environment() -> _ReviewConfigValues:
         "model_provider": os.environ.get("CODEX_PROVIDER", "openai").strip(),
         "openai_api_key": openai_api_key,
         "model_name": os.environ.get("CODEX_MODEL", "gpt-5.6-luna").strip(),
-        "reasoning_effort": os.environ.get("CODEX_REASONING_EFFORT", "high").strip(),
+        "reasoning_effort": os.environ.get("CODEX_REASONING_EFFORT", "").strip(),
         "force_fresh_review": False,
         "web_search_mode": os.environ.get("CODEX_WEB_SEARCH_MODE", "live").strip(),
         "debug_level": _parse_debug_level(os.environ.get("DEBUG_CODEREVIEW", "0")),

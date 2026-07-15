@@ -400,7 +400,7 @@ class CodexClient:
         return bool(self.config.stream_output and not suppress_stream)
 
     def _resolve_effort(self, reasoning_effort: str | None) -> str:
-        value = reasoning_effort or self.config.reasoning_effort or "medium"
+        value = reasoning_effort or self.config.reasoning_effort
         try:
             return normalize_reasoning_effort(value)
         except ValueError as error:

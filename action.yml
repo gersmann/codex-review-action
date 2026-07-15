@@ -14,9 +14,12 @@ inputs:
     required: false
     default: "gpt-5.6-luna"
   reasoning_effort:
-    description: "Reasoning effort: none | minimal | low | medium | high | xhigh | max"
+    description: >-
+      Reasoning effort: none | minimal | low | medium | high | xhigh | max.
+      Leave empty (the default) to use the model-dependent default:
+      xhigh for gpt-5.6-luna, medium for gpt-5.6-terra and gpt-5.6-sol.
     required: false
-    default: "high"
+    default: ""
   web_search_mode:
     description: "Web search mode: disabled | cached | live"
     required: false

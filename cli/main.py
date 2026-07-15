@@ -15,6 +15,7 @@ from .core.config import ReviewConfig
 from .core.exceptions import CodexReviewError, ConfigurationError
 from .core.github_types import ReviewRequestContext
 from .core.model_pricing import SUPPORTED_REVIEW_MODELS
+from .core.models import AckComment
 from .core.reasoning_effort import REASONING_EFFORT_VALUES, normalize_reasoning_effort
 from .workflows.review_workflow import ReviewWorkflow
 
@@ -92,8 +93,12 @@ Environment Variables:
         dest="reasoning_effort",
         type=normalize_reasoning_effort,
         choices=REASONING_EFFORT_VALUES,
-        default="high",
-        help=f"Reasoning effort level: {' | '.join(REASONING_EFFORT_VALUES)} (default: high)",
+        default=None,
+        help=(
+            f"Reasoning effort level: {' | '.join(REASONING_EFFORT_VALUES)} "
+            "(default depends on the model: xhigh for gpt-5.6-luna, "
+            "medium for gpt-5.6-terra and gpt-5.6-sol)"
+        ),
     )
     parser.add_argument(
         "--web-search-mode",
@@ -231,10 +236,30 @@ def _handle_comment_event(
 
     review_config = ReviewConfig.from_args(**config_kwargs)
     request = _review_request_context(comment)
+    github_client: GitHubClient | None = None
+    ack: AckComment | None = None
     if not config.dry_run:
-        GitHubClient(config).acknowledge_review_request(pr_number, request)
+        github_client = GitHubClient(config)
+        ack = github_client.acknowledge_review_request(pr_number, request)
 
-    return _run_review_workflow(review_config)
+    exit_code = _run_review_workflow(review_config)
+    if exit_code == 0 and github_client is not None and ack is not None:
+        _delete_ack_comment_best_effort(github_client, pr_number, ack)
+    return exit_code
+
+
+def _delete_ack_comment_best_effort(
+    github_client: GitHubClient,
+    pr_number: int,
+    ack: AckComment,
+) -> None:
+    try:
+        github_client.delete_ack_comment(pr_number, ack)
+    except Exception as exc:
+        print(
+            f"Failed to delete acknowledgement comment id={ack.comment_id}: {exc}",
+            file=sys.stderr,
+        )
 
 
 def _review_request_context(comment: dict[str, Any]) -> ReviewRequestContext:

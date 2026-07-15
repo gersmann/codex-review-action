@@ -14,6 +14,16 @@ REASONING_EFFORT_VALUES = (
 )
 
 
+def default_reasoning_effort_for_model(model_name: str) -> str:
+    """Return the default reasoning effort for a model when none is specified."""
+    name = model_name.lower()
+    if "luna" in name:
+        return "xhigh"
+    if "terra" in name or "sol" in name:
+        return "medium"
+    return "high"
+
+
 def normalize_reasoning_effort(value: object) -> str:
     if isinstance(value, str):
         normalized = value.strip().lower().replace("_", "-")
@@ -28,6 +38,9 @@ def normalize_reasoning_effort(value: object) -> str:
 
 def main() -> int:
     value = os.environ.get("CODEX_REASONING_EFFORT_INPUT", "")
+    if not value.strip():
+        # Empty means "not specified": the model-dependent default applies later.
+        return 0
     try:
         print(normalize_reasoning_effort(value))
     except ValueError as error:

@@ -40,7 +40,8 @@ python -m cli.main --repo owner/repo --pr 123 --debug 2
 Defaults:
 
 - Model: `gpt-5.6-luna`
-- Reasoning effort: `high`
+- Reasoning effort: model-dependent when not specified (`xhigh` for
+  `gpt-5.6-luna`, `medium` for `gpt-5.6-terra` and `gpt-5.6-sol`)
 - Provider: `openai`
 
 ## GitHub Actions Events
@@ -55,7 +56,8 @@ Authorized comments may override one run:
 
 Unsupported commands and unauthorized commenters are ignored.
 Authorized requests receive a rocket reaction and a queued reply before the
-review starts.
+review starts. The queued reply is deleted once the summary posts; on failure
+it remains.
 
 ## Environment Variables
 
@@ -65,7 +67,7 @@ review starts.
 | `OPENAI_API_KEY` | OpenAI API key | Required |
 | `CODEX_MODEL` | `gpt-5.6-luna`, `gpt-5.6-terra`, or `gpt-5.6-sol` | `gpt-5.6-luna` |
 | `CODEX_PROVIDER` | Model provider | `openai` |
-| `CODEX_REASONING_EFFORT` | Reasoning effort | `high` |
+| `CODEX_REASONING_EFFORT` | Reasoning effort | Empty: `xhigh` for `gpt-5.6-luna`, `medium` for `gpt-5.6-terra`/`gpt-5.6-sol` |
 | `CODEX_WEB_SEARCH_MODE` | Web search mode | `live` |
 | `CODEX_ADDITIONAL_PROMPT` | Additional reviewer guidance | Empty |
 | `CODEX_ALLOWED_COMMENTER_ASSOCIATIONS` | Roles allowed to request reviews | `MEMBER,OWNER,COLLABORATOR` |
@@ -80,8 +82,8 @@ Invalid configuration fails before the review starts.
 2. Build review context and ask Codex for schema-validated findings.
 3. Re-adjudicate prior findings separately from new findings.
 4. Anchor new findings to current diff lines and post publishable comments.
-5. Refresh the PR summary with active-finding counts, token usage, and estimated
-   cost.
+5. Refresh the PR summary with active-finding counts, token usage, estimated
+   cost, and time elapsed.
 
 ## Testing
 

@@ -15,7 +15,12 @@ from cli.core.review_usage import ReviewUsage
 from cli.review.artifacts import ReviewArtifacts
 from cli.review.posting import ReviewPostingOutcome
 from cli.review.resume_state import render_review_summary_metadata
-from cli.workflows.review_workflow import SUMMARY_MARKER, ReviewSummary, ReviewWorkflow
+from cli.workflows.review_workflow import (
+    SUMMARY_MARKER,
+    ReviewSummary,
+    ReviewWorkflow,
+    _format_elapsed,
+)
 
 
 @dataclass
@@ -381,13 +386,64 @@ def test_process_review_posts_usage_and_estimated_cost(tmp_path: Path) -> None:
 
     summary = pr.as_issue().created_comments[0]
     assert "### Usage" in summary
-    assert "- Model: `gpt-5.6-luna` (high reasoning)" in summary
+    assert "- Model: `gpt-5.6-luna` (xhigh reasoning)" in summary
     assert "- Observed model responses: 2" in summary
     assert "- Total tokens: 1,500,000" in summary
     assert "- Input tokens: 1,000,000 (200,000 cached)" in summary
     assert "- Output tokens: 500,000 (300,000 reasoning)" in summary
     assert "- Estimated cost: $3.8200" in summary
+    assert "- Time elapsed: " in summary
     assert result.usage == usage
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (0.0, "0s"),
+        (47.0, "47s"),
+        (59.9, "59s"),
+        (272.0, "4m 32s"),
+        (245.0, "4m 05s"),
+        (3900.0, "1h 05m"),
+        (7325.0, "2h 02m"),
+    ],
+)
+def test_format_elapsed_formats_durations(seconds: float, expected: str) -> None:
+    assert _format_elapsed(seconds) == expected
+
+
+def test_process_review_summary_reports_elapsed_time(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import time as time_module
+
+    pr = _FakePR()
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, _FakeGitHubClient(pr)),
+        codex_client=cast(
+            Any,
+            _FakeCodexClient(
+                json.dumps(
+                    {
+                        "overall_correctness": "patch is correct",
+                        "overall_explanation": "No issues found.",
+                        "overall_confidence_score": 0.9,
+                        "carried_forward": [],
+                        "findings": [],
+                    }
+                )
+            ),
+        ),
+    )
+
+    ticks = iter([100.0])
+    monkeypatch.setattr(time_module, "monotonic", lambda: next(ticks, 372.0))
+
+    workflow.process_review(7)
+
+    assert "- Time elapsed: 4m 32s" in pr.as_issue().created_comments[0]
 
 
 def test_process_review_reports_unavailable_usage_without_failing(tmp_path: Path) -> None:
@@ -417,6 +473,7 @@ def test_process_review_reports_unavailable_usage_without_failing(tmp_path: Path
         "- Usage: unavailable (no token usage events received)"
         in (pr.as_issue().created_comments[0])
     )
+    assert "- Time elapsed: " in pr.as_issue().created_comments[0]
     assert result.usage is None
 
 

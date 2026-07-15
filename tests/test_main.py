@@ -7,7 +7,7 @@ import pytest
 
 from cli import main as main_module
 from cli.core.exceptions import CodexReviewError
-from cli.core.models import ReviewRunResult
+from cli.core.models import AckComment, ReviewRunResult
 from cli.review.posting import ReviewPostingOutcome
 from cli.workflows.review_workflow import (
     ReviewSummary,
@@ -15,7 +15,7 @@ from cli.workflows.review_workflow import (
 )
 
 
-def test_parser_is_review_only_with_luna_high_defaults() -> None:
+def test_parser_is_review_only_with_luna_default_and_unset_reasoning() -> None:
     parser = main_module.create_parser()
     destinations = {action.dest for action in parser._actions}
 
@@ -24,7 +24,7 @@ def test_parser_is_review_only_with_luna_high_defaults() -> None:
 
     args = parser.parse_args(["--repo", "owner/repo", "--pr", "17"])
     assert args.model_name == "gpt-5.6-luna"
-    assert args.reasoning_effort == "high"
+    assert args.reasoning_effort is None
 
 
 def test_parser_rejects_unpriced_review_model() -> None:
@@ -271,6 +271,12 @@ def test_main_runs_review_workflow_with_comment_overrides(monkeypatch, tmp_path,
             assert request.commenter_login == "octocat"
             assert request.event_name == "issue_comment"
             events.append("acknowledged")
+            return AckComment(comment_id=555, event_name=request.event_name)
+
+        def delete_ack_comment(self, pr_number, ack):
+            assert pr_number == 17
+            assert ack == AckComment(comment_id=555, event_name="issue_comment")
+            events.append("deleted")
 
     class _Workflow:
         def __init__(self, config):
@@ -292,7 +298,150 @@ def test_main_runs_review_workflow_with_comment_overrides(monkeypatch, tmp_path,
     rc = main_module.main()
 
     assert rc == 0
+    assert events == ["acknowledged", "deleted"]
     assert "Review completed: patch is incorrect, 1 findings" in capsys.readouterr().out
+
+
+def test_main_leaves_ack_comment_when_review_fails(monkeypatch, tmp_path, capsys) -> None:
+    event_payload = {
+        "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
+        "comment": {
+            "id": 123,
+            "body": "/review",
+            "user": {"login": "octocat"},
+            "author_association": "MEMBER",
+        },
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event_payload), encoding="utf-8")
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "1")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issue_comment")
+
+    events: list[str] = []
+
+    class _GitHubClient:
+        def __init__(self, config):  # noqa: ARG002
+            pass
+
+        def acknowledge_review_request(self, pr_number, request):
+            events.append("acknowledged")
+            return AckComment(comment_id=555, event_name=request.event_name)
+
+        def delete_ack_comment(self, pr_number, ack):  # noqa: ARG002
+            events.append("deleted")
+
+    class _Workflow:
+        def __init__(self, config):  # noqa: ARG002
+            pass
+
+        def process_review(self, pr_number: int) -> ReviewWorkflowResult:  # noqa: ARG002
+            raise CodexReviewError("boom")
+
+    monkeypatch.setattr(main_module, "GitHubClient", _GitHubClient)
+    monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
+    monkeypatch.setattr(sys, "argv", ["codex-review"])
+
+    rc = main_module.main()
+
+    assert rc == 1
+    assert events == ["acknowledged"]
+    assert "Review error: boom" in capsys.readouterr().err
+
+
+def test_main_reports_ack_deletion_failure_without_failing_run(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    event_payload = {
+        "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
+        "comment": {
+            "id": 123,
+            "body": "/review",
+            "user": {"login": "octocat"},
+            "author_association": "MEMBER",
+        },
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event_payload), encoding="utf-8")
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "1")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issue_comment")
+
+    class _GitHubClient:
+        def __init__(self, config):  # noqa: ARG002
+            pass
+
+        def acknowledge_review_request(self, pr_number, request):  # noqa: ARG002
+            return AckComment(comment_id=555, event_name=request.event_name)
+
+        def delete_ack_comment(self, pr_number, ack):  # noqa: ARG002
+            raise RuntimeError("permission denied")
+
+    class _Workflow:
+        def __init__(self, config):  # noqa: ARG002
+            pass
+
+        def process_review(self, pr_number: int) -> ReviewWorkflowResult:  # noqa: ARG002
+            return _make_review_result(findings_count=0)
+
+    monkeypatch.setattr(main_module, "GitHubClient", _GitHubClient)
+    monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
+    monkeypatch.setattr(sys, "argv", ["codex-review"])
+
+    rc = main_module.main()
+
+    assert rc == 0
+    assert (
+        "Failed to delete acknowledgement comment id=555: permission denied"
+        in capsys.readouterr().err
+    )
+
+
+def test_main_dry_run_skips_ack_and_deletion(monkeypatch, tmp_path) -> None:
+    event_payload = {
+        "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
+        "comment": {
+            "id": 123,
+            "body": "/review",
+            "user": {"login": "octocat"},
+            "author_association": "MEMBER",
+        },
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event_payload), encoding="utf-8")
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "1")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issue_comment")
+    monkeypatch.setenv("DRY_RUN", "1")
+
+    class _UnexpectedClient:
+        def __init__(self, config):  # noqa: ARG002
+            raise AssertionError("dry runs must not touch the acknowledgement client")
+
+    class _Workflow:
+        def __init__(self, config):  # noqa: ARG002
+            pass
+
+        def process_review(self, pr_number: int) -> ReviewWorkflowResult:  # noqa: ARG002
+            return _make_review_result(findings_count=0)
+
+    monkeypatch.setattr(main_module, "GitHubClient", _UnexpectedClient)
+    monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
+    monkeypatch.setattr(sys, "argv", ["codex-review"])
+
+    assert main_module.main() == 0
 
 
 def test_main_noops_for_unwired_verify_command_as_review_only(
@@ -364,14 +513,78 @@ def test_main_runs_review_workflow_with_comment_defaults(monkeypatch, tmp_path) 
             assert request.commenter_login == "octocat"
             assert request.event_name == "pull_request_review_comment"
             events.append("acknowledged")
+            return AckComment(comment_id=777, event_name=request.event_name)
+
+        def delete_ack_comment(self, pr_number, ack):
+            assert pr_number == 19
+            assert ack == AckComment(comment_id=777, event_name="pull_request_review_comment")
+            events.append("deleted")
 
     class _Workflow:
         def __init__(self, config):
             assert events == ["acknowledged"]
             assert config.pr_number == 19
             assert config.model_name == "gpt-5.6-luna"
-            assert config.reasoning_effort == "high"
+            assert config.reasoning_effort == "xhigh"
             assert config.force_fresh_review is False
+
+        def process_review(self, pr_number: int) -> ReviewWorkflowResult:
+            assert pr_number == 19
+            return _make_review_result(findings_count=0)
+
+    monkeypatch.setattr(main_module, "GitHubClient", _GitHubClient)
+    monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
+    monkeypatch.setattr(sys, "argv", ["codex-review"])
+
+    assert main_module.main() == 0
+    assert events == ["acknowledged", "deleted"]
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_model", "expected_effort"),
+    [
+        ("/review reasoning:high", "gpt-5.6-luna", "high"),
+        ("/review model:gpt-5.6-terra", "gpt-5.6-terra", "medium"),
+    ],
+)
+def test_main_comment_reasoning_defaults_follow_effective_model(
+    monkeypatch, tmp_path, body: str, expected_model: str, expected_effort: str
+) -> None:
+    event_payload = {
+        "pull_request": {"number": 19},
+        "comment": {
+            "id": 456,
+            "body": body,
+            "user": {"login": "octocat"},
+            "author_association": "MEMBER",
+        },
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event_payload), encoding="utf-8")
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "1")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request_review_comment")
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.delenv("CODEX_REASONING_EFFORT", raising=False)
+
+    class _GitHubClient:
+        def __init__(self, config):  # noqa: ARG002
+            pass
+
+        def acknowledge_review_request(self, pr_number, request):
+            return AckComment(comment_id=777, event_name=request.event_name)
+
+        def delete_ack_comment(self, pr_number, ack):  # noqa: ARG002
+            pass
+
+    class _Workflow:
+        def __init__(self, config):
+            assert config.model_name == expected_model
+            assert config.reasoning_effort == expected_effort
 
         def process_review(self, pr_number: int) -> ReviewWorkflowResult:
             assert pr_number == 19

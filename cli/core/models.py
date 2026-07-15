@@ -139,6 +139,14 @@ class ReviewFinding:
 
 
 @dataclass(frozen=True)
+class AckComment:
+    """Handle to a posted review acknowledgement comment for later deletion."""
+
+    comment_id: int
+    event_name: str
+
+
+@dataclass(frozen=True)
 class PriorCodexReviewComment:
     """Unresolved Codex-authored review thread comment reused on reruns."""
 

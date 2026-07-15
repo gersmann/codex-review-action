@@ -61,19 +61,22 @@ jobs:
         with:
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           model: gpt-5.6-luna
-          reasoning_effort: high
           web_search_mode: disabled
           allowed_commenter_associations: MEMBER,OWNER,COLLABORATOR
 ```
 
 ## Commands
 
-- `/review` runs a review with `gpt-5.6-luna` and high reasoning by default.
+- `/review` runs a review with `gpt-5.6-luna` and xhigh reasoning by default.
+- When reasoning is not specified, the default follows the model: `xhigh` for
+  `gpt-5.6-luna`, `medium` for `gpt-5.6-terra` and `gpt-5.6-sol`.
 - `/review reasoning:xhigh model:gpt-5.6-sol` overrides one requested review.
 - Other commands are ignored.
 
 After authorizing a request, the reviewer immediately adds a rocket reaction
 and replies that the review is queued. Inline requests receive inline replies.
+The queued reply is deleted once the review summary posts; the rocket reaction
+stays. If the review fails, the queued reply remains.
 
 ## Inputs
 
@@ -81,7 +84,7 @@ and replies that the review is queued. Inline requests receive inline replies.
 |---|---|---|
 | `openai_api_key` | OpenAI API key | Required |
 | `model` | `gpt-5.6-luna`, `gpt-5.6-terra`, or `gpt-5.6-sol` | `gpt-5.6-luna` |
-| `reasoning_effort` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` | `high` |
+| `reasoning_effort` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` | Empty: `xhigh` for `gpt-5.6-luna`, `medium` for `gpt-5.6-terra`/`gpt-5.6-sol` |
 | `web_search_mode` | `disabled`, `cached`, or `live` | `live` |
 | `additional_prompt` | Extra reviewer instructions | Empty |
 | `allowed_commenter_associations` | GitHub roles allowed to request reviews | `MEMBER,OWNER,COLLABORATOR` |
@@ -92,10 +95,12 @@ and replies that the review is queued. Inline requests receive inline replies.
 
 ## Review Output
 
-- A rocket reaction and short queued reply on the review request.
+- A rocket reaction and short queued reply on the review request; the queued
+  reply is removed after the summary posts.
 - Inline comments anchored to current diff lines.
 - A refreshed PR summary with new findings, still-relevant prior findings,
-  observed model responses, token usage, and estimated cost.
+  observed model responses, token usage, estimated cost, and time elapsed
+  (for example `- Time elapsed: 4m 32s`).
 - No comment when an inline finding cannot be anchored safely; the summary reports dropped findings.
 
 Prior unresolved Codex-authored threads are supplied as context so repeated requested reviews avoid duplicating findings and can identify which earlier findings remain relevant.

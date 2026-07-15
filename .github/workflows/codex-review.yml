@@ -56,6 +56,5 @@ jobs:
         with:
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           model: gpt-5.6-luna
-          reasoning_effort: high
           web_search_mode: disabled
           debug_level: 1

@@ -87,6 +87,7 @@ def _make_config(*, debug_level: int = 0, stream_output: bool = False) -> Review
         repository="o/r",
         pr_number=1,
         openai_api_key="test-key",
+        reasoning_effort="high",
         stream_output=stream_output,
         debug_level=debug_level,
     )

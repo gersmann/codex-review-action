@@ -26,7 +26,7 @@ def test_bundled_workflow_runs_only_requested_reviews() -> None:
     assert "refs/pull/{0}/head" in workflow
     assert "mode: review" not in workflow
     assert "model: gpt-5.6-luna" in workflow
-    assert "reasoning_effort: high" in workflow
+    assert "reasoning_effort:" not in workflow
     assert "dry_run: 1" not in workflow
 
 
@@ -42,9 +42,10 @@ def test_comment_reviews_do_not_restore_or_save_review_cache() -> None:
     assert "github.event_name == 'pull_request'" in save_condition
 
 
-def test_action_defaults_to_luna_with_high_reasoning() -> None:
+def test_action_defaults_to_luna_with_model_based_reasoning() -> None:
     action = (ROOT / "action.yml").read_text(encoding="utf-8")
 
     assert 'default: "gpt-5.6-luna"' in action
-    assert 'default: "high"' in action
+    assert 'default: "high"' not in action
+    assert "xhigh for gpt-5.6-luna" in action
     assert "gpt-5.6-luna gpt-5.6-terra gpt-5.6-sol" in action

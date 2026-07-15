@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -99,6 +100,7 @@ def _build_review_summary(
     model_name: str = "",
     reasoning_effort: str = "",
     usage: ReviewUsage | None = None,
+    elapsed_seconds: float | None = None,
 ) -> str:
     summary_lines = [
         SUMMARY_MARKER,
@@ -124,6 +126,7 @@ def _build_review_summary(
             model_name=model_name,
             reasoning_effort=reasoning_effort,
             usage=usage,
+            elapsed_seconds=elapsed_seconds,
         )
     )
     summary_lines.append("")
@@ -136,6 +139,7 @@ def _build_usage_summary_lines(
     model_name: str,
     reasoning_effort: str,
     usage: ReviewUsage | None,
+    elapsed_seconds: float | None = None,
 ) -> list[str]:
     lines = ["", "### Usage"]
     if model_name:
@@ -143,20 +147,32 @@ def _build_usage_summary_lines(
         lines.append(f"- Model: `{model_name}`{effort_suffix}")
     if usage is None:
         lines.append("- Usage: unavailable (no token usage events received)")
-        return lines
-
-    estimated_cost = estimate_review_cost(model_name, usage)
-    lines.extend(
-        [
-            f"- Observed model responses: {usage.response_count:,}",
-            f"- Total tokens: {usage.total_tokens:,}",
-            f"- Input tokens: {usage.input_tokens:,} ({usage.cached_input_tokens:,} cached)",
-            f"- Output tokens: {usage.output_tokens:,} "
-            f"({usage.reasoning_output_tokens:,} reasoning)",
-            f"- Estimated cost: ${estimated_cost:.4f}",
-        ]
-    )
+    else:
+        estimated_cost = estimate_review_cost(model_name, usage)
+        lines.extend(
+            [
+                f"- Observed model responses: {usage.response_count:,}",
+                f"- Total tokens: {usage.total_tokens:,}",
+                f"- Input tokens: {usage.input_tokens:,} ({usage.cached_input_tokens:,} cached)",
+                f"- Output tokens: {usage.output_tokens:,} "
+                f"({usage.reasoning_output_tokens:,} reasoning)",
+                f"- Estimated cost: ${estimated_cost:.4f}",
+            ]
+        )
+    if elapsed_seconds is not None:
+        lines.append(f"- Time elapsed: {_format_elapsed(elapsed_seconds)}")
     return lines
+
+
+def _format_elapsed(seconds: float) -> str:
+    total_seconds = int(seconds)
+    if total_seconds < 60:
+        return f"{total_seconds}s"
+    if total_seconds < 3600:
+        minutes, remaining_seconds = divmod(total_seconds, 60)
+        return f"{minutes}m {remaining_seconds:02d}s"
+    hours, remainder = divmod(total_seconds, 3600)
+    return f"{hours}h {remainder // 60:02d}m"
 
 
 def _build_summary_explanation(
@@ -572,6 +588,7 @@ class ReviewWorkflow:
 
     def process_review(self, pr_number: int) -> ReviewWorkflowResult:
         """Process a code review for the given pull request."""
+        review_started_at = time.monotonic()
         self._debug(1, f"Processing review for {self.config.repository} PR #{pr_number}")
 
         pr = self.github_client.get_pr(pr_number)
@@ -646,6 +663,7 @@ class ReviewWorkflow:
             model_name=self.config.model_name,
             reasoning_effort=self.config.reasoning_effort,
             usage=self.codex_client.usage,
+            elapsed_seconds=time.monotonic() - review_started_at,
         )
         self._publish_summary(pr, summary_text)
 

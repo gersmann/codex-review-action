@@ -91,7 +91,9 @@ class ReviewLikeProtocol(Protocol):
 
 @runtime_checkable
 class RequesterLikeProtocol(Protocol):
-    def requestJsonAndCheck(self, verb: str, url: str, input: dict[str, Any]) -> object: ...
+    def requestJsonAndCheck(
+        self, verb: str, url: str, input: dict[str, Any] | None = None
+    ) -> object: ...
 
     def graphql_query(
         self, query: str, variables: Mapping[str, object]

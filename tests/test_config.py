@@ -6,7 +6,7 @@ from cli.core.config import ReviewConfig
 from cli.core.exceptions import ConfigurationError
 
 
-def test_config_uses_luna_high_defaults(
+def test_config_defaults_to_luna_with_xhigh_reasoning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("CODEX_MODEL", raising=False)
@@ -20,7 +20,7 @@ def test_config_uses_luna_high_defaults(
     )
 
     assert config.model_name == "gpt-5.6-luna"
-    assert config.reasoning_effort == "high"
+    assert config.reasoning_effort == "xhigh"
 
 
 def test_from_args_rejects_unknown_keys() -> None:
@@ -42,10 +42,19 @@ def test_from_args_overrides_known_values_without_environment() -> None:
     assert config.debug_level == 2
 
 
-def test_review_defaults_to_luna_with_high_reasoning(
+@pytest.mark.parametrize(
+    ("model_name", "expected_effort"),
+    [
+        ("gpt-5.6-luna", "xhigh"),
+        ("gpt-5.6-terra", "medium"),
+        ("gpt-5.6-sol", "medium"),
+    ],
+)
+def test_reasoning_defaults_depend_on_model(
     monkeypatch: pytest.MonkeyPatch,
+    model_name: str,
+    expected_effort: str,
 ) -> None:
-    monkeypatch.delenv("CODEX_MODEL", raising=False)
     monkeypatch.delenv("CODEX_REASONING_EFFORT", raising=False)
 
     config = ReviewConfig.from_args(
@@ -53,10 +62,59 @@ def test_review_defaults_to_luna_with_high_reasoning(
         repository="owner/repo",
         pr_number=1,
         openai_api_key="test-key",
+        model_name=model_name,
     )
 
-    assert config.model_name == "gpt-5.6-luna"
+    assert config.reasoning_effort == expected_effort
+
+
+def test_explicit_reasoning_argument_overrides_model_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CODEX_REASONING_EFFORT", raising=False)
+
+    config = ReviewConfig.from_args(
+        github_token="token",
+        repository="owner/repo",
+        pr_number=1,
+        openai_api_key="test-key",
+        model_name="gpt-5.6-luna",
+        reasoning_effort="high",
+    )
+
     assert config.reasoning_effort == "high"
+
+
+def test_explicit_reasoning_environment_overrides_model_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODEX_REASONING_EFFORT", "high")
+
+    config = ReviewConfig.from_args(
+        github_token="token",
+        repository="owner/repo",
+        pr_number=1,
+        openai_api_key="test-key",
+        model_name="gpt-5.6-luna",
+    )
+
+    assert config.reasoning_effort == "high"
+
+
+def test_empty_reasoning_environment_uses_model_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODEX_REASONING_EFFORT", "")
+
+    config = ReviewConfig.from_args(
+        github_token="token",
+        repository="owner/repo",
+        pr_number=1,
+        openai_api_key="test-key",
+        model_name="gpt-5.6-terra",
+    )
+
+    assert config.reasoning_effort == "medium"
 
 
 @pytest.mark.parametrize(
