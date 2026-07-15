@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
-from .review_usage import ReviewUsage
+if TYPE_CHECKING:
+    from .review_usage import ReviewUsage
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,8 @@
+import subprocess
+import sys
+import textwrap
 from decimal import Decimal
+from pathlib import Path
 
 from cli.core.model_pricing import (
     MODEL_PRICING,
@@ -6,6 +10,37 @@ from cli.core.model_pricing import (
     estimate_review_cost,
 )
 from cli.core.review_usage import ReviewUsage
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_config_import_does_not_require_codex_sdk() -> None:
+    script = textwrap.dedent(
+        """
+        import builtins
+
+        original_import = builtins.__import__
+
+        def import_without_codex(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "codex" or name.startswith("codex."):
+                raise ModuleNotFoundError("blocked codex import")
+            return original_import(name, globals, locals, fromlist, level)
+
+        builtins.__import__ = import_without_codex
+
+        import cli.core.config
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_supported_review_models_have_verified_pricing() -> None:
