@@ -22,8 +22,22 @@
 - Mock GitHub Actions runs by writing a minimal event JSON and pointing `GITHUB_EVENT_PATH` to it; set `GITHUB_TOKEN` and `OPENAI_API_KEY` to test tokens.
 
 ## Commit & Pull Request Guidelines
-- Use Conventional Commits (e.g., `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`) as seen in history.
-- PRs: describe the what/why, link issues, include before/after output (CLI logs or posted comments). Update docs if flags/inputs change.
+- Never commit directly to `main`.
+- Commit subjects use imperative mood ("Add X", not "Added/Adds"), are
+  capitalized, have no trailing period, are at most 50 characters, and have no
+  prefixes such as `feat:` or `fix:`.
+- Commit bodies are separated from the subject by a blank line, wrapped at 72
+  characters, and explain what changed and why rather than how. Skip the body
+  when the subject is self-explanatory.
+- Keep one logical change per commit. If the subject needs "and", split it.
+- Use a concise, imperative PR title that describes the outcome rather than a
+  category of work or a mechanical list of files changed.
+- PR summaries explain the motivation and impact: why the change was made and
+  what it enables. Do not mechanically list changes already visible in the
+  diff.
+- Do not include a "Test Plan" section.
+- Add screenshots, sample payloads, or before/after output when changes affect
+  external integrations or responses. Update docs if flags or inputs change.
 - Pre-submit: `make qa` must pass; keep diffs minimal and scoped.
 
 ## Security & Configuration Tips
