@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from .exceptions import ConfigurationError
+from .model_pricing import SUPPORTED_REVIEW_MODELS
 
 _CONFIG_OVERRIDE_KEYS = frozenset(
     {
@@ -78,8 +79,8 @@ class ReviewConfig:
     mode: str = "review"  # "review" or "act"
     model_provider: str = "openai"
     openai_api_key: str = ""
-    model_name: str = "gpt-5.4"
-    reasoning_effort: str = "medium"
+    model_name: str = "gpt-5.6-luna"
+    reasoning_effort: str = "high"
     force_fresh_review: bool = False
     web_search_mode: str = "live"
     act_instructions: str = ""
@@ -142,6 +143,12 @@ class ReviewConfig:
 
         if self.mode == "review" and self.pr_number is None:
             raise ConfigurationError("PR number is required in review mode")
+
+        if self.mode == "review" and self.model_name not in SUPPORTED_REVIEW_MODELS:
+            raise ConfigurationError(
+                f"Unsupported review model: {self.model_name}. Supported models: "
+                f"{', '.join(SUPPORTED_REVIEW_MODELS)}"
+            )
 
         if self.debug_level < 0:
             raise ConfigurationError("Debug level must be non-negative")
@@ -285,8 +292,8 @@ def _config_values_from_environment() -> _ReviewConfigValues:
         "mode": os.environ.get("CODEX_MODE", "review").strip(),
         "model_provider": os.environ.get("CODEX_PROVIDER", "openai").strip(),
         "openai_api_key": openai_api_key,
-        "model_name": os.environ.get("CODEX_MODEL", "gpt-5.4").strip(),
-        "reasoning_effort": os.environ.get("CODEX_REASONING_EFFORT", "medium").strip(),
+        "model_name": os.environ.get("CODEX_MODEL", "gpt-5.6-luna").strip(),
+        "reasoning_effort": os.environ.get("CODEX_REASONING_EFFORT", "high").strip(),
         "force_fresh_review": False,
         "web_search_mode": os.environ.get("CODEX_WEB_SEARCH_MODE", "live").strip(),
         "act_instructions": os.environ.get("CODEX_ACT_INSTRUCTIONS", "").strip(),

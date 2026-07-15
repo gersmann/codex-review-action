@@ -18,12 +18,14 @@ from ..core.github_types import (
     PullRequestLikeProtocol,
     ReviewCommentLikeProtocol,
 )
+from ..core.model_pricing import estimate_review_cost
 from ..core.models import (
     REVIEW_OUTPUT_SCHEMA,
     CarriedForwardReviewComment,
     PriorCodexReviewComment,
     ReviewRunResult,
 )
+from ..core.review_usage import ReviewUsage
 from ..review.anchor_engine import build_anchor_maps
 from ..review.artifacts import ReviewArtifacts
 from ..review.context_manager import ReviewContextWriter
@@ -52,8 +54,8 @@ from ..review.review_prompt import (
 )
 
 SUMMARY_TIP = (
-    'Tip: comment with "/codex address comments" to attempt automated fixes for unresolved '
-    "review threads."
+    'Tip: request another review with "/codex review" and optionally add '
+    "`model:gpt-5.6-terra` or `reasoning:xhigh`."
 )
 
 
@@ -77,6 +79,7 @@ class ReviewWorkflowResult:
     review: ReviewRunResult
     posting_outcome: ReviewPostingOutcome
     summary: ReviewSummary
+    usage: ReviewUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +96,9 @@ def _build_review_summary(
     posting_outcome: ReviewPostingOutcome,
     *,
     reviewed_head_sha: str,
+    model_name: str = "",
+    reasoning_effort: str = "",
+    usage: ReviewUsage | None = None,
 ) -> str:
     summary_lines = [
         SUMMARY_MARKER,
@@ -113,9 +119,44 @@ def _build_review_summary(
     if overall_explanation:
         summary_lines.append("")
         summary_lines.append(overall_explanation)
+    summary_lines.extend(
+        _build_usage_summary_lines(
+            model_name=model_name,
+            reasoning_effort=reasoning_effort,
+            usage=usage,
+        )
+    )
     summary_lines.append("")
     summary_lines.append(SUMMARY_TIP)
     return "\n".join(summary_lines)
+
+
+def _build_usage_summary_lines(
+    *,
+    model_name: str,
+    reasoning_effort: str,
+    usage: ReviewUsage | None,
+) -> list[str]:
+    lines = ["", "### Usage"]
+    if model_name:
+        effort_suffix = f" ({reasoning_effort} reasoning)" if reasoning_effort else ""
+        lines.append(f"- Model: `{model_name}`{effort_suffix}")
+    if usage is None:
+        lines.append("- Usage: unavailable (no token usage events received)")
+        return lines
+
+    estimated_cost = estimate_review_cost(model_name, usage)
+    lines.extend(
+        [
+            f"- Observed model responses: {usage.response_count:,}",
+            f"- Total tokens: {usage.total_tokens:,}",
+            f"- Input tokens: {usage.input_tokens:,} ({usage.cached_input_tokens:,} cached)",
+            f"- Output tokens: {usage.output_tokens:,} "
+            f"({usage.reasoning_output_tokens:,} reasoning)",
+            f"- Estimated cost: ${estimated_cost:.4f}",
+        ]
+    )
+    return lines
 
 
 def _build_summary_explanation(
@@ -603,6 +644,9 @@ class ReviewWorkflow:
             summary,
             posting_outcome,
             reviewed_head_sha=head_sha,
+            model_name=self.config.model_name,
+            reasoning_effort=self.config.reasoning_effort,
+            usage=self.codex_client.usage,
         )
         self._publish_summary(pr, summary_text)
 
@@ -610,6 +654,7 @@ class ReviewWorkflow:
             review=parsed_result,
             posting_outcome=posting_outcome,
             summary=summary,
+            usage=self.codex_client.usage,
         )
 
     def _post_results(

@@ -11,6 +11,7 @@ import pytest
 from cli.core.config import ReviewConfig
 from cli.core.exceptions import CodexExecutionError, ReviewContractError, ReviewResumeError
 from cli.core.models import InlineCommentPayload, ReviewThreadComment, ReviewThreadSnapshot
+from cli.core.review_usage import ReviewUsage
 from cli.review.artifacts import ReviewArtifacts
 from cli.review.posting import ReviewPostingOutcome
 from cli.review.resume_state import render_review_summary_metadata
@@ -196,8 +197,9 @@ class _FakeGitHubClient:
 
 
 class _FakeCodexClient:
-    def __init__(self, response: str) -> None:
+    def __init__(self, response: str, *, usage: ReviewUsage | None = None) -> None:
         self.response = response
+        self.usage = usage
         self.calls: list[dict[str, Any]] = []
 
     def execute_structured(
@@ -344,6 +346,79 @@ def test_process_review_posts_summary_and_passes_dedupe_context(
             },
         },
     ]
+
+
+def test_process_review_posts_usage_and_estimated_cost(tmp_path: Path) -> None:
+    pr = _FakePR()
+    usage = ReviewUsage(
+        response_count=2,
+        input_tokens=1_000_000,
+        cached_input_tokens=200_000,
+        output_tokens=500_000,
+        reasoning_output_tokens=300_000,
+        total_tokens=1_500_000,
+    )
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, _FakeGitHubClient(pr)),
+        codex_client=cast(
+            Any,
+            _FakeCodexClient(
+                json.dumps(
+                    {
+                        "overall_correctness": "patch is correct",
+                        "overall_explanation": "No issues found.",
+                        "overall_confidence_score": 0.9,
+                        "carried_forward": [],
+                        "findings": [],
+                    }
+                ),
+                usage=usage,
+            ),
+        ),
+    )
+
+    result = workflow.process_review(7)
+
+    summary = pr.as_issue().created_comments[0]
+    assert "### Usage" in summary
+    assert "- Model: `gpt-5.6-luna` (high reasoning)" in summary
+    assert "- Observed model responses: 2" in summary
+    assert "- Total tokens: 1,500,000" in summary
+    assert "- Input tokens: 1,000,000 (200,000 cached)" in summary
+    assert "- Output tokens: 500,000 (300,000 reasoning)" in summary
+    assert "- Estimated cost: $3.8200" in summary
+    assert result.usage == usage
+
+
+def test_process_review_reports_unavailable_usage_without_failing(tmp_path: Path) -> None:
+    pr = _FakePR()
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, _FakeGitHubClient(pr)),
+        codex_client=cast(
+            Any,
+            _FakeCodexClient(
+                json.dumps(
+                    {
+                        "overall_correctness": "patch is correct",
+                        "overall_explanation": "No issues found.",
+                        "overall_confidence_score": 0.9,
+                        "carried_forward": [],
+                        "findings": [],
+                    }
+                )
+            ),
+        ),
+    )
+
+    result = workflow.process_review(7)
+
+    assert (
+        "- Usage: unavailable (no token usage events received)"
+        in (pr.as_issue().created_comments[0])
+    )
+    assert result.usage is None
 
 
 def test_process_review_dry_run_skips_summary_comment(

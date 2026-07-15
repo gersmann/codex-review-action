@@ -10,8 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .clients.github_client import GitHubClient
 from .core.config import ReviewConfig
 from .core.exceptions import CodexReviewError, ConfigurationError
+from .core.github_types import ReviewRequestContext
+from .core.model_pricing import SUPPORTED_REVIEW_MODELS
 from .core.reasoning_effort import REASONING_EFFORT_VALUES, normalize_reasoning_effort
 from .workflows.edit_workflow import EditWorkflow
 from .workflows.review_workflow import ReviewWorkflow
@@ -38,8 +41,8 @@ Examples:
   # Dry run mode
   python -m cli.main --repo owner/repo --pr 123 --dry-run
 
-  # Use different model
-  python -m cli.main --repo owner/repo --pr 123 --model gpt-4o --provider openai
+  # Use a different priced review model
+  python -m cli.main --repo owner/repo --pr 123 --model gpt-5.6-terra
 
 Environment Variables:
   GITHUB_TOKEN        GitHub API token (required)
@@ -87,16 +90,17 @@ Environment Variables:
     parser.add_argument(
         "--model",
         dest="model_name",
-        default="gpt-5.4",
-        help="Model name (default: gpt-5.4)",
+        choices=SUPPORTED_REVIEW_MODELS,
+        default="gpt-5.6-luna",
+        help="Model name (default: gpt-5.6-luna)",
     )
     parser.add_argument(
         "--reasoning-effort",
         dest="reasoning_effort",
         type=normalize_reasoning_effort,
         choices=REASONING_EFFORT_VALUES,
-        default="medium",
-        help=f"Reasoning effort level: {' | '.join(REASONING_EFFORT_VALUES)} (default: medium)",
+        default="high",
+        help=f"Reasoning effort level: {' | '.join(REASONING_EFFORT_VALUES)} (default: high)",
     )
     parser.add_argument(
         "--web-search-mode",
@@ -240,7 +244,32 @@ def _handle_comment_event(
     if overrides.reasoning_effort is not None:
         config_kwargs["reasoning_effort"] = overrides.reasoning_effort
 
-    return _run_mode_workflow(ReviewConfig.from_args(**config_kwargs))
+    review_config = ReviewConfig.from_args(**config_kwargs)
+    request = _review_request_context(comment)
+    if not config.dry_run:
+        GitHubClient(config).acknowledge_review_request(pr_number, request)
+
+    return _run_mode_workflow(review_config)
+
+
+def _review_request_context(comment: dict[str, Any]) -> ReviewRequestContext:
+    comment_id = comment.get("id")
+    if not isinstance(comment_id, int):
+        raise ConfigurationError("Review request comment is missing a numeric id")
+
+    user = comment.get("user")
+    if not isinstance(user, dict):
+        raise ConfigurationError("Review request comment is missing its author")
+    login = user.get("login")
+    if not isinstance(login, str) or not login.strip():
+        raise ConfigurationError("Review request comment is missing its author login")
+
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    if event_name == "issue_comment":
+        return ReviewRequestContext(comment_id, login, "issue_comment")
+    if event_name == "pull_request_review_comment":
+        return ReviewRequestContext(comment_id, login, "pull_request_review_comment")
+    raise ConfigurationError(f"Unsupported review request event: {event_name or '<missing>'}")
 
 
 def _extract_event_comment(actions_event: dict[str, Any] | None) -> dict[str, Any] | None:

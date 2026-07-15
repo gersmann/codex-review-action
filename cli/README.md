@@ -88,18 +88,25 @@ python -m cli.main --repo owner/repo --pr 123 --debug 2
 
 ### GitHub Actions
 
-When used via the composite action, the CLI runs in GitHub Actions mode automatically and reads the event payload to determine whether to run a full review or a comment-triggered edit.
+When used via the bundled workflow, the CLI runs only after an authorized
+`/codex review` issue or inline review comment. Opening or updating a pull
+request does not start a review.
 
 Review posting behavior:
+- Codex immediately adds a rocket reaction and a queued reply after authorizing
+  the request.
 - Codex posts a PR-level issue comment with a review summary.
 - Findings are posted as standalone inline PR review comments on the relevant lines.
+- The summary includes the selected model and reasoning effort, observed model
+  response count, total/input/cached/output/reasoning token breakdowns, and an
+  estimated cost from the static Luna, Terra, and Sol pricing registry.
 
-Comment-triggered edits
+Comment-triggered reviews
 
-- Add a comment on the PR that starts with:
-  - `/codex <instructions>` or `/codex: <instructions>`
-- Bare `/codex` comments are ignored; the command must include instructions.
-- The remainder of the comment is passed to the coding agent. The workflow executes the agent with the configured Codex runtime settings for this environment, then commits and pushes resulting branch changes (unless dry-run).
+- Add `/codex review` as a PR comment or inline review reply.
+- Trusted users can override the run with leading `model:` and `reasoning:`
+  parameters.
+- Other `/codex` comments do not start a review.
 
 ### Environment Variables
 
@@ -108,9 +115,9 @@ Comment-triggered edits
 | `GITHUB_TOKEN` | GitHub API token | *Required* |
 | `OPENAI_API_KEY` | OpenAI API key | *Required for OpenAI* |
 | `CODEX_MODE` | Operation mode (review/act) | `review` |
-| `CODEX_MODEL` | Model name | `gpt-5.4` |
+| `CODEX_MODEL` | `gpt-5.6-luna`, `gpt-5.6-terra`, or `gpt-5.6-sol` | `gpt-5.6-luna` |
 | `CODEX_PROVIDER` | Model provider | `openai` |
-| `CODEX_REASONING_EFFORT` | Reasoning effort level | `medium` |
+| `CODEX_REASONING_EFFORT` | Reasoning effort level | `high` |
 | `CODEX_ACT_INSTRUCTIONS` | Additional instructions for act mode | `` |
 | `CODEX_ALLOWED_COMMENTER_ASSOCIATIONS` | Comma-separated GitHub comment roles allowed to trigger act mode | `MEMBER,OWNER,COLLABORATOR` |
 | `DEBUG_CODEREVIEW` | Debug level (0-2) | `0` |

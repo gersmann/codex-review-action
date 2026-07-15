@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sys
 
+import pytest
+
 from cli import main as main_module
 from cli.core.exceptions import CodexReviewError
 from cli.core.models import ReviewRunResult
@@ -11,6 +13,18 @@ from cli.workflows.review_workflow import (
     ReviewSummary,
     ReviewWorkflowResult,
 )
+
+
+def test_parser_defaults_to_luna_with_high_reasoning() -> None:
+    args = main_module.create_parser().parse_args([])
+
+    assert args.model_name == "gpt-5.6-luna"
+    assert args.reasoning_effort == "high"
+
+
+def test_parser_rejects_unpriced_review_model() -> None:
+    with pytest.raises(SystemExit):
+        main_module.create_parser().parse_args(["--model", "gpt-5.4"])
 
 
 def _make_review_result(
@@ -195,6 +209,37 @@ def test_main_rejects_invalid_review_reasoning_override(monkeypatch, tmp_path, c
     assert "Invalid reasoning effort 'extreme'" in capsys.readouterr().err
 
 
+def test_main_rejects_unpriced_model_before_acknowledging(monkeypatch, tmp_path, capsys) -> None:
+    event_payload = {
+        "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
+        "comment": {
+            "id": 123,
+            "body": "/codex review model:gpt-5.4",
+            "user": {"login": "octocat"},
+            "author_association": "MEMBER",
+        },
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event_payload), encoding="utf-8")
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "1")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issue_comment")
+
+    class _UnexpectedClient:
+        def __init__(self, config):  # noqa: ARG002
+            raise AssertionError("invalid requests must not be acknowledged")
+
+    monkeypatch.setattr(main_module, "GitHubClient", _UnexpectedClient)
+    monkeypatch.setattr(sys, "argv", ["codex-review"])
+
+    assert main_module.main() == 1
+    assert "Unsupported review model: gpt-5.4" in capsys.readouterr().err
+
+
 def test_main_runs_review_workflow_with_comment_overrides(monkeypatch, tmp_path, capsys) -> None:
     event_payload = {
         "issue": {"number": 17, "pull_request": {"url": "https://example.test/pr/17"}},
@@ -216,8 +261,22 @@ def test_main_runs_review_workflow_with_comment_overrides(monkeypatch, tmp_path,
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issue_comment")
     monkeypatch.setenv("CODEX_MODE", "review")
 
+    events: list[str] = []
+
+    class _GitHubClient:
+        def __init__(self, config):
+            assert config.pr_number == 17
+
+        def acknowledge_review_request(self, pr_number, request):
+            assert pr_number == 17
+            assert request.comment_id == 123
+            assert request.commenter_login == "octocat"
+            assert request.event_name == "issue_comment"
+            events.append("acknowledged")
+
     class _Workflow:
         def __init__(self, config):
+            assert events == ["acknowledged"]
             assert config.allowed_commenter_associations == ("MEMBER", "OWNER", "COLLABORATOR")
             assert config.mode == "review"
             assert config.pr_number == 17
@@ -234,6 +293,7 @@ def test_main_runs_review_workflow_with_comment_overrides(monkeypatch, tmp_path,
             raise AssertionError("review comments must never run EditWorkflow")
 
     monkeypatch.setattr(main_module, "EditWorkflow", _UnexpectedEditWorkflow)
+    monkeypatch.setattr(main_module, "GitHubClient", _GitHubClient)
     monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
     monkeypatch.setattr(sys, "argv", ["codex-review"])
 
@@ -303,8 +363,22 @@ def test_main_runs_review_workflow_with_comment_defaults(monkeypatch, tmp_path) 
     monkeypatch.setenv("CODEX_MODEL", "gpt-5.6-terra")
     monkeypatch.setenv("CODEX_REASONING_EFFORT", "low")
 
+    events: list[str] = []
+
+    class _GitHubClient:
+        def __init__(self, config):
+            assert config.pr_number == 19
+
+        def acknowledge_review_request(self, pr_number, request):
+            assert pr_number == 19
+            assert request.comment_id == 456
+            assert request.commenter_login == "octocat"
+            assert request.event_name == "pull_request_review_comment"
+            events.append("acknowledged")
+
     class _Workflow:
         def __init__(self, config):
+            assert events == ["acknowledged"]
             assert config.pr_number == 19
             assert config.model_name == "gpt-5.6-terra"
             assert config.reasoning_effort == "low"
@@ -315,6 +389,7 @@ def test_main_runs_review_workflow_with_comment_defaults(monkeypatch, tmp_path) 
             return _make_review_result(findings_count=0)
 
     monkeypatch.setattr(main_module, "EditWorkflow", object)
+    monkeypatch.setattr(main_module, "GitHubClient", _GitHubClient)
     monkeypatch.setattr(main_module, "ReviewWorkflow", _Workflow)
     monkeypatch.setattr(sys, "argv", ["codex-review"])
 

@@ -1,40 +1,16 @@
 # Codex Review Action
 
-Run Codex to review pull requests automatically or on demand through `/codex review` comments.
+Run Codex to review pull requests when a trusted user requests one with a
+`/codex review` comment.
 
 - **Review**: posts precise inline review comments and a PR-level summary. When there are no findings, only the summary is posted.
 - **Escalate**: lets trusted reviewers override the model and reasoning effort for a specific PR without granting content write access.
 
-## Quick Start (Review)
+## Quick Start
 
-```yaml
-name: Codex Review
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Codex autonomous review
-        uses: nomadlabsinc/codex-review-action@v1.9.0-nomad.1
-        with:
-          mode: review
-          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-          model: gpt-5.6-terra
-          reasoning_effort: low
-```
-
-## Review on `/codex review` Comments
-
-When a trusted user comments `/codex review` on a PR, the action runs another review. Optional leading `reasoning:` and `model:` tokens override that run's defaults.
+When a trusted user comments `/codex review` on a PR, the action reacts with a
+rocket, replies that the review is queued, and runs the review. Optional
+`reasoning:` and `model:` tokens override that run's defaults.
 
 ```yaml
 name: Codex Comment Review
@@ -84,10 +60,9 @@ jobs:
       - name: Codex comment-triggered review
         uses: nomadlabsinc/codex-review-action@v1.9.0-nomad.1
         with:
-          mode: review
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-          model: gpt-5.6-terra
-          reasoning_effort: low
+          model: gpt-5.6-luna
+          reasoning_effort: high
           web_search_mode: disabled
           allowed_commenter_associations: MEMBER,OWNER,COLLABORATOR
 ```
@@ -105,8 +80,8 @@ jobs:
 | `openai_api_key` | OpenAI API key | *required* |
 | `mode` | `review` | `review` |
 | **Model** | | |
-| `model` | Model name | `gpt-5.4` |
-| `reasoning_effort` | `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` (`x-high` is accepted as an alias) | `medium` |
+| `model` | `gpt-5.6-luna` / `gpt-5.6-terra` / `gpt-5.6-sol` | `gpt-5.6-luna` |
+| `reasoning_effort` | `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` (`x-high` is accepted as an alias) | `high` |
 | **Review-only** | | |
 | `additional_prompt` | Extra reviewer instructions (verbatim) | |
 | `allowed_commenter_associations` | Comma-separated GitHub `author_association` values allowed to trigger comment reviews | `MEMBER,OWNER,COLLABORATOR` |
@@ -119,18 +94,34 @@ jobs:
 
 ## What It Posts
 
+- **Request acknowledgment** as a rocket reaction and a short queued reply. An
+  inline request receives an inline reply; a PR comment receives a PR comment.
 - **Inline comments** anchored to exact diff lines. If a line isn't in the current diff, the finding is skipped.
-- **PR-level summary** as an issue comment on each run (refreshed on re-runs; prior summaries are deleted).
+- **PR-level summary** with findings, observed response count, token totals and
+  breakdowns, and estimated cost (refreshed on re-runs; prior summaries are
+  deleted).
 - **Multi-line suggestions** only when contiguous and short; otherwise a single-line comment.
 
-## Review Continuation
+## Usage and Cost Estimates
 
-On repeated `pull_request` review runs, the action now tries to continue the prior Codex review instead of restarting from scratch.
+The summary prices observed token usage with the following static rates per
+million tokens, taken from the official model pages for
+[Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna),
+[Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra), and
+[Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol):
 
-1. The PR summary stores the previously reviewed head SHA in hidden metadata.
-2. Review mode caches an isolated Codex home keyed by repository, PR number, model, and reviewed SHA.
-3. On the next push, the action restores that cache, resumes the latest stored review thread, and scopes the prompt to the delta since the previously reviewed SHA.
-4. If the prior SHA is no longer an ancestor, the cache is missing, or no thread can be restored, the action falls back to a fresh full review.
+| Model | Input | Cached input | Output |
+|-------|------:|-------------:|-------:|
+| `gpt-5.6-luna` | $1.00 | $0.10 | $6.00 |
+| `gpt-5.6-terra` | $2.50 | $0.25 | $15.00 |
+| `gpt-5.6-sol` | $5.00 | $0.50 | $30.00 |
+
+Cached input is included in the reported input total and priced at its lower
+rate. Reasoning output is included in output tokens and is shown as a breakdown,
+not charged a second time. The amount is an estimate because provider pricing
+can change and the protocol does not expose every pricing dimension, such as
+cache-write tokens. Update `cli/core/model_pricing.py` when provider rates
+change.
 
 ## Deduplication on Repeated Runs
 

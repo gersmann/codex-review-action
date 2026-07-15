@@ -240,7 +240,7 @@ def test_get_unresolved_threads_paginates_graphql_results() -> None:
     ]
 
 
-def test_review_summary_mentions_address_comments_tip() -> None:
+def test_review_summary_mentions_review_request_tip() -> None:
     summary = _build_review_summary(
         ReviewRunResult(
             overall_correctness="patch is correct",
@@ -260,7 +260,7 @@ def test_review_summary_mentions_address_comments_tip() -> None:
     )
 
     assert SUMMARY_TIP in summary
-    assert "/codex address comments" in summary
+    assert "/codex review" in summary
 
 
 def test_process_edit_command_fails_on_thread_fetch_errors(monkeypatch) -> None:
