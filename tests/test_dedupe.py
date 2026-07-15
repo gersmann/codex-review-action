@@ -41,3 +41,18 @@ def test_extract_decodes_escaped_ampersand_without_double_unescaping() -> None:
     body = "Paragraph.\n\n<!-- codex-current-code\na = b --&amp;gt; c\n-->"
 
     assert _extract_current_code_block(body) == "a = b --&gt; c"
+
+
+def test_extract_preserves_anchored_whitespace() -> None:
+    body = "Paragraph.\n\n<!-- codex-current-code\n    return foo\n-->"
+
+    assert _extract_current_code_block(body) == "    return foo"
+
+
+def test_current_code_matching_requires_exact_indentation(tmp_path) -> None:
+    from cli.review.dedupe import _current_code_matches_file
+
+    (tmp_path / "sample.py").write_text("def outer():\n    return foo\n", encoding="utf-8")
+
+    assert _current_code_matches_file(tmp_path, "sample.py", "    return foo")
+    assert not _current_code_matches_file(tmp_path, "sample.py", "        return foo")

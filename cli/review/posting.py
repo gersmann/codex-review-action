@@ -224,8 +224,8 @@ def _render_evidence_marker(
         return ""
     if start_line < 1 or start_line > len(lines):
         return ""
-    snippet = "\n".join(lines[start_line - 1 : end_line]).strip()
-    if not snippet:
+    snippet = "\n".join(lines[start_line - 1 : end_line])
+    if not snippet.strip():
         return ""
     encoded = snippet.replace("&", "&amp;").replace(EVIDENCE_MARKER_CLOSE, "--&gt;")
     return f"\n\n{EVIDENCE_MARKER_OPEN}\n{encoded}\n{EVIDENCE_MARKER_CLOSE}"

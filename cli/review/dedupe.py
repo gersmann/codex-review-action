@@ -119,8 +119,9 @@ def _extract_current_code_block(body: str) -> str | None:
     match = _EVIDENCE_MARKER_RE.search(body)
     if match is not None:
         # Reverse the entity escaping applied by posting._render_evidence_marker.
-        current_code = match.group(1).strip().replace("--&gt;", "-->").replace("&amp;", "&")
-        return current_code or None
+        # Whitespace is preserved so the evidence stays anchored to the exact lines.
+        current_code = match.group(1).replace("--&gt;", "-->").replace("&amp;", "&")
+        return current_code if current_code.strip() else None
     match = _CURRENT_CODE_BLOCK_RE.search(body)
     if match is None:
         return None
@@ -136,7 +137,9 @@ def _current_code_matches_file(repo_root: Path, relative_path: str, current_code
         file_text = repo_file.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return False
-    return current_code.strip() in file_text
+    # Marker evidence preserves the anchored lines' whitespace; legacy-block
+    # evidence arrives pre-stripped, for which this check is unchanged.
+    return current_code in file_text
 
 
 def _resolve_repo_file(repo_root: Path, relative_path: str) -> Path | None:
