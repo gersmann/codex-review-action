@@ -61,7 +61,6 @@ jobs:
         with:
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           model: gpt-5.6-luna
-          web_search_mode: disabled
           allowed_commenter_associations: MEMBER,OWNER,COLLABORATOR
 ```
 
@@ -108,13 +107,12 @@ explanation, a confidence score, time elapsed, and usage stats.
 | `openai_api_key` | OpenAI API key | Required |
 | `model` | `gpt-5.6-luna`, `gpt-5.6-terra`, or `gpt-5.6-sol` | `gpt-5.6-luna` |
 | `reasoning_effort` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` | Empty: `xhigh` for `gpt-5.6-luna`, `medium` for `gpt-5.6-terra`/`gpt-5.6-sol` |
-| `web_search_mode` | `disabled`, `cached`, or `live` | `live` |
+| `web_search_mode` | `disabled`, `cached`, or `live` | `disabled` |
 | `additional_prompt` | Extra reviewer instructions | Empty |
 | `allowed_commenter_associations` | GitHub roles allowed to request reviews and verifications | `MEMBER,OWNER,COLLABORATOR` |
 | `dry_run` | Print payloads without posting when set to `1` | `0` |
 | `debug_level` | Debug verbosity from `0` to `2` | `1` |
 | `stream_agent_messages` | Stream model output when set to `1` | `1` |
-| `extra_pip_args` | Additional pip installation flags | Empty |
 
 ## Review Output
 

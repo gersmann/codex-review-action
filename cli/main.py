@@ -105,7 +105,7 @@ Environment Variables:
         "--web-search-mode",
         dest="web_search_mode",
         choices=["disabled", "cached", "live"],
-        default="live",
+        default="disabled",
         help="Web search mode (default: live)",
     )
 

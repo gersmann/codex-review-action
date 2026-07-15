@@ -78,7 +78,7 @@ class ReviewConfig:
     model_name: str = "gpt-5.6-luna"
     reasoning_effort: str = ""
     force_fresh_review: bool = False
-    web_search_mode: str = "live"
+    web_search_mode: str = "disabled"
     debug_level: int = 0
     stream_output: bool = True
     dry_run: bool = False
@@ -292,7 +292,7 @@ def _config_values_from_environment() -> _ReviewConfigValues:
         "model_name": os.environ.get("CODEX_MODEL", "gpt-5.6-luna").strip(),
         "reasoning_effort": os.environ.get("CODEX_REASONING_EFFORT", "").strip(),
         "force_fresh_review": False,
-        "web_search_mode": os.environ.get("CODEX_WEB_SEARCH_MODE", "live").strip(),
+        "web_search_mode": os.environ.get("CODEX_WEB_SEARCH_MODE", "disabled").strip(),
         "debug_level": _parse_debug_level(os.environ.get("DEBUG_CODEREVIEW", "0")),
         "stream_output": os.environ.get("STREAM_AGENT_MESSAGES", "1") != "0",
         "dry_run": os.environ.get("DRY_RUN") == "1",
