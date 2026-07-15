@@ -88,18 +88,20 @@ python -m cli.main --repo owner/repo --pr 123 --debug 2
 
 ### GitHub Actions
 
-When used via the composite action, the CLI runs in GitHub Actions mode automatically and reads the event payload to determine whether to run a full review or a comment-triggered edit.
+When used via the bundled workflow, the CLI runs only after an authorized
+`/codex review` issue or inline review comment. Opening or updating a pull
+request does not start a review.
 
 Review posting behavior:
 - Codex posts a PR-level issue comment with a review summary.
 - Findings are posted as standalone inline PR review comments on the relevant lines.
 
-Comment-triggered edits
+Comment-triggered reviews
 
-- Add a comment on the PR that starts with:
-  - `/codex <instructions>` or `/codex: <instructions>`
-- Bare `/codex` comments are ignored; the command must include instructions.
-- The remainder of the comment is passed to the coding agent. The workflow executes the agent with the configured Codex runtime settings for this environment, then commits and pushes resulting branch changes (unless dry-run).
+- Add `/codex review` as a PR comment or inline review reply.
+- Trusted users can override the run with leading `model:` and `reasoning:`
+  parameters.
+- Other `/codex` comments do not start a review.
 
 ### Environment Variables
 
