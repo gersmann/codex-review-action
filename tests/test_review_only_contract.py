@@ -28,7 +28,7 @@ def test_self_review_workflow_routes_review_comments_without_write_access() -> N
 
     comment_job_index = workflow_text.index("  comment-review:")
     guard_index = workflow_text.index("Verify same-repository PR", comment_job_index)
-    checkout_index = workflow_text.index("actions/checkout@v4", guard_index)
+    checkout_index = workflow_text.index("actions/checkout@v5", guard_index)
     secret_index = workflow_text.index("openai_api_key:", guard_index)
 
     assert comment_job_index < guard_index < checkout_index < secret_index
@@ -43,3 +43,28 @@ def test_no_workflow_has_contents_write_permission() -> None:
     for workflow_path in workflow_dir.glob("*.yml"):
         workflow_text = workflow_path.read_text(encoding="utf-8")
         assert "contents: write" not in workflow_text, workflow_path.name
+
+
+def test_github_actions_use_node_24_versions() -> None:
+    action_text = (ROOT / "action.yml").read_text(encoding="utf-8")
+    ci_text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
+    review_text = (ROOT / ".github/workflows/codex-review.yml").read_text(encoding="utf-8")
+    all_actions = "\n".join((action_text, ci_text, readme_text, review_text))
+
+    assert "actions/checkout@v5" in ci_text
+    assert "actions/checkout@v5" in readme_text
+    assert "actions/checkout@v5" in review_text
+    assert "actions/setup-python@v6" in ci_text
+    assert "astral-sh/setup-uv@v8.3.2" in ci_text
+    assert "actions/cache/restore@v5" in action_text
+    assert "actions/cache/save@v5" in action_text
+
+    for node_20_action in (
+        "actions/checkout@v4",
+        "actions/setup-python@v5",
+        "astral-sh/setup-uv@v3",
+        "actions/cache/restore@v4",
+        "actions/cache/save@v4",
+    ):
+        assert node_20_action not in all_actions
