@@ -13,6 +13,9 @@ from .anchor_engine import RangeAnchor, SingleAnchor, resolve_range
 from .artifacts import ReviewArtifacts
 from .patch_parser import ParsedPatch, to_relative_path
 
+EVIDENCE_MARKER_OPEN = "<!-- codex-current-code"
+EVIDENCE_MARKER_CLOSE = "-->"
+
 
 @dataclass(frozen=True)
 class InlineCommentBuildResult:
@@ -169,6 +172,12 @@ def build_inline_comment_payloads(
         comment_body = f"{title}\n\n{final_body}" if final_body else title
 
         if isinstance(anchor, RangeAnchor):
+            anchor_start, anchor_end = anchor.start_line, anchor.end_line
+        else:
+            anchor_start = anchor_end = anchor.line
+        comment_body += _render_evidence_marker(repo_root, rel_path, anchor_start, anchor_end)
+
+        if isinstance(anchor, RangeAnchor):
             payloads.append(
                 InlineCommentPayload(
                     body=comment_body,
@@ -195,6 +204,30 @@ def build_inline_comment_payloads(
         dropped_missing_file_map=dropped_missing_file_map,
         dropped_missing_anchor=dropped_missing_anchor,
     )
+
+
+def _render_evidence_marker(
+    repo_root: Path,
+    rel_path: str,
+    start_line: int,
+    end_line: int,
+) -> str:
+    """Render a hidden HTML comment holding the current code at the anchored lines.
+
+    Reruns extract this snippet (see dedupe._EVIDENCE_MARKER_RE) to decide whether a
+    prior comment still applies, so the evidence must come verbatim from the checkout
+    rather than from model output.
+    """
+    try:
+        lines = (repo_root / rel_path).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError, ValueError):
+        return ""
+    if start_line < 1 or start_line > len(lines):
+        return ""
+    snippet = "\n".join(lines[start_line - 1 : end_line]).strip()
+    if not snippet or EVIDENCE_MARKER_CLOSE in snippet:
+        return ""
+    return f"\n\n{EVIDENCE_MARKER_OPEN}\n{snippet}\n{EVIDENCE_MARKER_CLOSE}"
 
 
 def post_inline_comments(

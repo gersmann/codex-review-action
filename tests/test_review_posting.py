@@ -208,3 +208,70 @@ def test_post_results_reports_dropped_findings(tmp_path: Path, capsys) -> None:
     assert "missing file map=2" in out
     assert outcome.dropped_count == 2
     assert outcome.describe_drops() == "missing file map=2"
+
+
+def test_inline_comment_embeds_hidden_evidence_marker(tmp_path: Path) -> None:
+    from cli.core.models import ReviewFinding
+    from cli.review.anchor_engine import build_anchor_maps
+    from cli.review.posting import build_inline_comment_payloads
+
+    (tmp_path / "sample.py").write_text("foo\nbar\nbaz\n", encoding="utf-8")
+    changed_files = [FakeChangedFile("sample.py", "@@ -0,0 +1,3 @@\n+foo\n+bar\n+baz\n")]
+    file_maps = build_anchor_maps(cast(list[Any], changed_files))
+    finding = ReviewFinding.from_mapping(
+        {
+            "title": "[P2] Example finding",
+            "body": "Please adjust this line.",
+            "confidence_score": None,
+            "priority": 2,
+            "code_location": {
+                "absolute_file_path": str(tmp_path / "sample.py"),
+                "line_range": {"start": 2, "end": 2},
+            },
+        }
+    )
+
+    result = build_inline_comment_payloads(
+        [finding],
+        file_maps,
+        {},
+        tmp_path,
+        dry_run=False,
+        debug=lambda level, message: None,
+    )
+
+    assert len(result.payloads) == 1
+    assert result.payloads[0].body.endswith("<!-- codex-current-code\nbar\n-->")
+
+
+def test_inline_comment_omits_evidence_marker_when_file_missing(tmp_path: Path) -> None:
+    from cli.core.models import ReviewFinding
+    from cli.review.anchor_engine import build_anchor_maps
+    from cli.review.posting import build_inline_comment_payloads
+
+    changed_files = [FakeChangedFile("sample.py", "@@ -0,0 +1,3 @@\n+foo\n+bar\n+baz\n")]
+    file_maps = build_anchor_maps(cast(list[Any], changed_files))
+    finding = ReviewFinding.from_mapping(
+        {
+            "title": "[P2] Example finding",
+            "body": "Please adjust this line.",
+            "confidence_score": None,
+            "priority": 2,
+            "code_location": {
+                "absolute_file_path": str(tmp_path / "sample.py"),
+                "line_range": {"start": 2, "end": 2},
+            },
+        }
+    )
+
+    result = build_inline_comment_payloads(
+        [finding],
+        file_maps,
+        {},
+        tmp_path,
+        dry_run=False,
+        debug=lambda level, message: None,
+    )
+
+    assert len(result.payloads) == 1
+    assert "codex-current-code" not in result.payloads[0].body

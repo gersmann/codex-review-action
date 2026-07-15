@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+from cli.review.dedupe import _extract_current_code_block
+
+
+def test_extract_reads_hidden_evidence_marker() -> None:
+    body = "The loop drops one retry.\n\n<!-- codex-current-code\nattempts += 1\n-->"
+
+    assert _extract_current_code_block(body) == "attempts += 1"
+
+
+def test_extract_reads_multiline_evidence_marker() -> None:
+    body = "Paragraph.\n\n<!-- codex-current-code\nfoo\nbar\n-->"
+
+    assert _extract_current_code_block(body) == "foo\nbar"
+
+
+def test_extract_falls_back_to_legacy_current_code_block() -> None:
+    body = "**Current code:**\n```python\nvalue = 2\n```\n\n**Problem:** broken."
+
+    assert _extract_current_code_block(body) == "value = 2"
+
+
+def test_extract_prefers_marker_over_legacy_block() -> None:
+    body = "**Current code:**\n```python\nlegacy\n```\n\n<!-- codex-current-code\nmarker\n-->"
+
+    assert _extract_current_code_block(body) == "marker"
+
+
+def test_extract_returns_none_without_evidence() -> None:
+    assert _extract_current_code_block("Just a matter-of-fact paragraph.") is None

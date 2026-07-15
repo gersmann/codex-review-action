@@ -9,6 +9,9 @@ from ..core.github_types import IssueCommentLikeProtocol, ReviewLikeProtocol
 from ..core.models import PriorCodexReviewComment, ReviewThreadSnapshot
 
 SUMMARY_MARKER = "Codex Autonomous Review:"
+# Hidden evidence marker appended by posting.py; invisible when GitHub renders the comment.
+_EVIDENCE_MARKER_RE = re.compile(r"<!--\s*codex-current-code\n(.*?)\n?-->", re.DOTALL)
+# Legacy format used by comments posted before the evidence marker existed.
 _CURRENT_CODE_BLOCK_RE = re.compile(r"\*\*Current code:\*\*\s*```[^\n]*\n(.*?)```", re.DOTALL)
 
 
@@ -113,7 +116,9 @@ def render_prior_codex_comments_for_prompt(
 
 
 def _extract_current_code_block(body: str) -> str | None:
-    match = _CURRENT_CODE_BLOCK_RE.search(body)
+    match = _EVIDENCE_MARKER_RE.search(body)
+    if match is None:
+        match = _CURRENT_CODE_BLOCK_RE.search(body)
     if match is None:
         return None
     current_code = match.group(1).strip()
