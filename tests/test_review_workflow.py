@@ -1441,7 +1441,9 @@ def test_process_review_wires_real_artifacts_and_inline_posting(tmp_path: Path) 
     assert "Needs one focused fix." in pr.as_issue().created_comments[0]
     assert github_client.inline_comments == [
         {
-            "body": "Example finding\n\nPlease adjust this line.",
+            "body": (
+                "Example finding\n\nPlease adjust this line.\n\n<!-- codex-current-code\nnew\n-->"
+            ),
             "path": "src.py",
             "side": "RIGHT",
             "commit_id": "head-sha",
