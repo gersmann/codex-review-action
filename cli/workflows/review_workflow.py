@@ -219,7 +219,6 @@ class ReviewWorkflow:
         parts: list[str] = [
             "You are an autonomous code review assistant.",
             "Follow the review guidelines below verbatim while producing prioritized, actionable findings.",
-            "Treat 'REVIEW COMMENT FORMAT (REPO STANDARD)' as authoritative over generic formatting guidance.",
         ]
 
         guidelines_text = guidelines.strip()

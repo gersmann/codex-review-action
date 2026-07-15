@@ -14,16 +14,26 @@ def _make_review_config() -> ReviewConfig:
     )
 
 
-def test_load_guidelines_include_repo_standard_comment_format() -> None:
+def test_load_guidelines_match_upstream_codex_rubric() -> None:
     guidelines = load_guidelines(_make_review_config())
 
-    assert "REVIEW COMMENT FORMAT (REPO STANDARD):" in guidelines
-    assert "**Current code:**" in guidelines
-    assert "**Problem:** Brief description (max 20 words)." in guidelines
-    assert "**Fix:**" in guidelines
-    assert "severity emoji + priority tag: 🔴 [P0]/[P1], 🟡 [P2], ⚪ [P3]" in guidelines
-    assert "Include file path and line number in the title when possible." in guidelines
-    assert "Skip comments for formatting-only issues, personal style preferences" in guidelines
+    # Upstream rubric content, vendored verbatim.
+    assert "You are acting as a reviewer for a proposed code change" in guidelines
+    assert "The body should be at most 1 paragraph." in guidelines
+    assert "should not include any chunks of code longer than 3 lines" in guidelines
+    assert '"[P1] Un-padding slices along wrong tensor dimensions"' in guidelines
+
+    # Retired repo-specific formatting must stay gone.
+    assert "REVIEW COMMENT FORMAT (REPO STANDARD)" not in guidelines
+    assert "**Current code:**" not in guidelines
+    assert "severity emoji" not in guidelines
+    assert "🔴" not in guidelines
+
+
+def test_load_guidelines_include_integration_addendum() -> None:
+    guidelines = load_guidelines(_make_review_config())
+
+    assert "# Integration addendum (codex-review-action)" in guidelines
 
     # Preserve required JSON output fields.
     assert '"carried_forward": [' in guidelines
@@ -32,8 +42,12 @@ def test_load_guidelines_include_repo_standard_comment_format() -> None:
     assert '"overall_correctness": "patch is correct" | "patch is incorrect"' in guidelines
     assert '"code_location": {' in guidelines
 
+    # Knowledge-cutoff guard for the correctness verdict.
+    assert "UNVERIFIABLE FACTS:" in guidelines
+    assert "may have changed after your knowledge cutoff" in guidelines
 
-def test_review_base_instructions_mark_repo_standard_as_authoritative() -> None:
+
+def test_review_base_instructions_have_no_repo_standard_reference() -> None:
     workflow = ReviewWorkflow(
         _make_review_config(),
         github_client=cast(Any, object()),
@@ -42,8 +56,8 @@ def test_review_base_instructions_mark_repo_standard_as_authoritative() -> None:
 
     instructions = workflow._build_review_base_instructions("dummy")
 
-    assert "REVIEW COMMENT FORMAT (REPO STANDARD)" in instructions
-    assert "authoritative" in instructions
+    assert "REVIEW COMMENT FORMAT (REPO STANDARD)" not in instructions
+    assert "Review guidelines:\ndummy" in instructions
 
 
 def test_review_base_instructions_do_not_duplicate_additional_prompt() -> None:
