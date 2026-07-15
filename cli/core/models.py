@@ -139,6 +139,14 @@ class ReviewFinding:
 
 
 @dataclass(frozen=True)
+class AckComment:
+    """Handle to a posted review acknowledgement comment for later deletion."""
+
+    comment_id: int
+    event_name: str
+
+
+@dataclass(frozen=True)
 class PriorCodexReviewComment:
     """Unresolved Codex-authored review thread comment reused on reruns."""
 
@@ -185,6 +193,7 @@ class ReviewCommentSnapshot:
     diff_hunk: str = ""
     commit_id: str = ""
     in_reply_to_id: int | None = None
+    id: int | None = None
 
     @property
     def prompt_line(self) -> int | None:
@@ -193,6 +202,7 @@ class ReviewCommentSnapshot:
     @classmethod
     def from_review_comment(cls, comment: ReviewCommentLikeProtocol) -> ReviewCommentSnapshot:
         author_value = comment.user.login if comment.user is not None else None
+        comment_id = getattr(comment, "id", None)
         return cls(
             body=comment.body.strip() if isinstance(comment.body, str) else "",
             path=comment.path if isinstance(comment.path, str) else "",
@@ -205,6 +215,7 @@ class ReviewCommentSnapshot:
             in_reply_to_id=comment.in_reply_to_id
             if isinstance(comment.in_reply_to_id, int)
             else None,
+            id=comment_id if isinstance(comment_id, int) else None,
         )
 
 
@@ -430,6 +441,63 @@ REVIEW_OUTPUT_SCHEMA: dict[str, object] = {
         "overall_explanation",
         "overall_confidence_score",
     ],
+    "additionalProperties": False,
+}
+
+
+VERIFY_VERDICTS = ("correct", "incorrect", "uncertain")
+
+
+@dataclass(frozen=True)
+class VerifyRunResult:
+    """Typed view of model output for a verification run."""
+
+    verdict: str
+    explanation: str
+    confidence_score: float | None
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> VerifyRunResult:
+        required_fields = {"verdict", "explanation", "confidence_score"}
+        missing_fields = sorted(required_fields - set(payload.keys()))
+        if missing_fields:
+            raise ReviewContractError(
+                "Verify output missing required fields: " + ", ".join(missing_fields)
+            )
+
+        verdict_raw = payload.get("verdict")
+        if not isinstance(verdict_raw, str) or verdict_raw not in VERIFY_VERDICTS:
+            raise ReviewContractError(
+                "Verify output field 'verdict' must be one of: " + ", ".join(VERIFY_VERDICTS)
+            )
+
+        explanation_raw = payload.get("explanation")
+        if not isinstance(explanation_raw, str):
+            raise ReviewContractError("Verify output field 'explanation' must be a string")
+
+        confidence_raw = payload.get("confidence_score")
+        if confidence_raw is not None and not isinstance(confidence_raw, (int, float)):
+            raise ReviewContractError(
+                "Verify output field 'confidence_score' must be a number or null"
+            )
+
+        return cls(
+            verdict=verdict_raw,
+            explanation=explanation_raw,
+            confidence_score=float(confidence_raw)
+            if isinstance(confidence_raw, (int, float))
+            else None,
+        )
+
+
+VERIFY_OUTPUT_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": list(VERIFY_VERDICTS)},
+        "explanation": {"type": "string"},
+        "confidence_score": {"type": ["number", "null"]},
+    },
+    "required": ["verdict", "explanation", "confidence_score"],
     "additionalProperties": False,
 }
 

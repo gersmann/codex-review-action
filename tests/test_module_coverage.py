@@ -20,7 +20,7 @@ from cli.core.models import (
     ReviewThreadComment,
     ReviewThreadSnapshot,
 )
-from cli.main import extract_codex_command, load_github_event
+from cli.main import extract_command, load_github_event
 from cli.review.anchor_engine import RangeAnchor, build_anchor_maps, resolve_range
 from cli.review.artifacts import ReviewArtifacts
 from cli.review.context_manager import ReviewContextWriter
@@ -693,12 +693,24 @@ def test_github_client_wraps_repo_and_pr_load_failures(monkeypatch: pytest.Monke
 def test_main_helpers_cover_commands_and_event_loading(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    assert extract_codex_command("/codex review") == "review"
-    assert extract_codex_command("/codex: review") == "review"
-    assert extract_codex_command("/codex") is None
-    assert extract_codex_command("/codex:") is None
-    assert extract_codex_command("/codexify review") is None
-    assert extract_codex_command("not a command") is None
+    assert extract_command("/review") == "review"
+    assert extract_command("/review model:gpt-5.6-sol reasoning:high") == (
+        "review model:gpt-5.6-sol reasoning:high"
+    )
+    assert extract_command("/review: model:gpt-5.6-sol") == "review model:gpt-5.6-sol"
+    assert extract_command("  /REVIEW  ") == "review"
+    assert extract_command("/verify") == "verify"
+    assert extract_command("/verify is X true?") == "verify is X true?"
+    assert extract_command("/reviewer looks wrong") is None
+    assert extract_command("/verified the fix") is None
+    assert extract_command("/codex review") == "review"
+    assert extract_command("/codex review model:gpt-5.6-sol") == "review model:gpt-5.6-sol"
+    assert extract_command("/codex: verify is X true?") == "verify is X true?"
+    assert extract_command("/codex fix everything") is None
+    assert extract_command("/codexy review") is None
+    assert extract_command("/codex") is None
+    assert extract_command("not a command") is None
+    assert extract_command("") is None
 
     good_event = tmp_path / "event.json"
     good_event.write_text(json.dumps({"pull_request": {"number": 1}}), encoding="utf-8")
@@ -722,5 +734,5 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
         "steps.review_resume_state.outputs.current_cache_key"
     ) in action_yaml
     assert "model: gpt-5.6-luna" in workflow_yaml
-    assert "reasoning_effort: high" in workflow_yaml
+    assert "reasoning_effort:" not in workflow_yaml
     assert "model: gpt-5.1-codex-max" not in workflow_yaml

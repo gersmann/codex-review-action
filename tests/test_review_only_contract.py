@@ -15,7 +15,9 @@ def test_composite_action_exposes_only_review_inputs_and_defaults() -> None:
     assert "review|act" not in action_text
     assert "CODEX_ACT_INSTRUCTIONS" not in action_text
     assert 'default: "gpt-5.6-luna"' in action_text
-    assert 'default: "high"' in action_text
+    assert 'default: "high"' not in action_text
+    assert "xhigh for gpt-5.6-luna" in action_text
+    assert "medium for gpt-5.6-terra and gpt-5.6-sol" in action_text
     assert (
         'PYTHONPATH="${{ github.action_path }}:${PYTHONPATH:-}" '
         "python3 -m cli.core.reasoning_effort"
@@ -38,7 +40,8 @@ def test_self_review_workflow_routes_review_comments_without_write_access() -> N
     assert "  pull_request:\n" not in workflow_triggers
     assert "comment-review:" in workflow_text
     assert "  review:\n" not in workflow_text
-    assert "startsWith(github.event.comment.body, '/codex review')" in workflow_text
+    assert "startsWith(github.event.comment.body, '/review ')" in workflow_text
+    assert "startsWith(github.event.comment.body, '/verify ')" in workflow_text
 
     comment_job_index = workflow_text.index("  comment-review:")
     comment_job = workflow_text[comment_job_index:]
@@ -51,7 +54,7 @@ def test_self_review_workflow_routes_review_comments_without_write_access() -> N
     assert '"$head_repository" != "$GITHUB_REPOSITORY"' in workflow_text
     assert "          mode:" not in comment_job
     assert "model: gpt-5.6-luna" in comment_job
-    assert "reasoning_effort: high" in comment_job
+    assert "reasoning_effort:" not in comment_job
     assert "web_search_mode: disabled" in comment_job
     assert "dry_run: 1" not in comment_job
 
@@ -122,4 +125,5 @@ def test_documentation_describes_only_on_demand_reviews() -> None:
         assert forbidden not in documentation
 
     assert "gpt-5.6-luna" in documentation
-    assert "reasoning_effort: high" in documentation
+    assert "reasoning_effort: high" not in documentation
+    assert "xhigh" in documentation

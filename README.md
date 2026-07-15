@@ -1,6 +1,6 @@
 # Codex Review Action
 
-Run focused pull-request reviews when an authorized reviewer comments `/codex review`. The bundled workflow does not run when a pull request is opened or updated.
+Run focused pull-request reviews when an authorized reviewer comments `/review`, and adjudicate individual reviewer claims when someone comments `/verify`. The bundled workflow does not run when a pull request is opened or updated.
 
 The reviewer posts precise inline findings and refreshes a PR-level summary. It never edits repository contents.
 
@@ -22,14 +22,18 @@ jobs:
   comment-review:
     if: >-
       (
-        (
-          github.event_name == 'issue_comment' &&
-          startsWith(github.event.comment.body, '/codex review') &&
-          github.event.issue.pull_request
-        ) || (
-          github.event_name == 'pull_request_review_comment' &&
-          startsWith(github.event.comment.body, '/codex review')
-        )
+        github.event.comment.body == '/review' ||
+        github.event.comment.body == '/verify' ||
+        startsWith(github.event.comment.body, '/review ') ||
+        startsWith(github.event.comment.body, '/review:') ||
+        startsWith(github.event.comment.body, '/verify ') ||
+        startsWith(github.event.comment.body, '/verify:') ||
+        startsWith(github.event.comment.body, '/codex ') ||
+        startsWith(github.event.comment.body, '/codex:')
+      ) &&
+      (
+        github.event_name == 'pull_request_review_comment' ||
+        github.event.issue.pull_request
       ) &&
       github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
@@ -55,19 +59,44 @@ jobs:
         with:
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           model: gpt-5.6-luna
-          reasoning_effort: high
-          web_search_mode: disabled
           allowed_commenter_associations: MEMBER,OWNER,COLLABORATOR
 ```
 
 ## Commands
 
-- `/codex review` runs a review with `gpt-5.6-luna` and high reasoning by default.
-- `/codex review reasoning:xhigh model:gpt-5.6-sol` overrides one requested review.
-- Other `/codex` commands are ignored.
+- `/review` runs a review with `gpt-5.6-luna` and xhigh reasoning by default.
+- When reasoning is not specified, the default follows the model: `xhigh` for
+  `gpt-5.6-luna`, `medium` for `gpt-5.6-terra` and `gpt-5.6-sol`.
+- `/review reasoning:xhigh model:gpt-5.6-sol` overrides one requested review.
+- The `gpt-5.6-` prefix is optional: `luna`, `sol`, and `terra` work as
+  shorthands. `/review sol` picks the model (reasoning defaults apply), and
+  `/review luna:high` sets both the model and its reasoning effort.
+  `model:luna` expands the same way.
+- `/verify` adjudicates a reviewer claim; see
+  [Verifying a reviewer comment](#verifying-a-reviewer-comment).
+- Other commands are ignored.
 
 After authorizing a request, the reviewer immediately adds a rocket reaction
-and replies that the review is queued. Inline requests receive inline replies.
+and replies that the request is queued. Inline requests receive inline replies.
+The queued reply is deleted once the review summary or verify verdict posts;
+the rocket reaction stays. If the run fails, the queued reply remains.
+
+### Verifying a reviewer comment
+
+Reply to any inline review comment with `/verify` and Codex adjudicates
+whether that thread's claim is correct, replying in the same thread with a
+verdict (`correct` / `incorrect` / `uncertain`), an evidence-based
+explanation, a confidence score, time elapsed, and usage stats.
+
+- As a top-level PR comment, state the claim yourself:
+  `/verify does the retry loop drop the last attempt?`
+- Options match `/review` (including model shorthands) and must come before
+  the claim text: `/verify terra:xhigh <claim>`
+- Defaults are the same as review: `gpt-5.6-luna`, with reasoning defaulting
+  to `xhigh` on `gpt-5.6-luna` and `medium` on `gpt-5.6-terra`/`gpt-5.6-sol`
+  when not specified.
+- As with reviews, the queued acknowledgement is deleted once the verdict
+  posts.
 
 ## Inputs
 
@@ -75,21 +104,22 @@ and replies that the review is queued. Inline requests receive inline replies.
 |---|---|---|
 | `openai_api_key` | OpenAI API key | Required |
 | `model` | `gpt-5.6-luna`, `gpt-5.6-terra`, or `gpt-5.6-sol` | `gpt-5.6-luna` |
-| `reasoning_effort` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` | `high` |
-| `web_search_mode` | `disabled`, `cached`, or `live` | `live` |
+| `reasoning_effort` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` | Empty: `xhigh` for `gpt-5.6-luna`, `medium` for `gpt-5.6-terra`/`gpt-5.6-sol` |
+| `web_search_mode` | `disabled`, `cached`, or `live` | `disabled` |
 | `additional_prompt` | Extra reviewer instructions | Empty |
-| `allowed_commenter_associations` | GitHub roles allowed to request reviews | `MEMBER,OWNER,COLLABORATOR` |
+| `allowed_commenter_associations` | GitHub roles allowed to request reviews and verifications | `MEMBER,OWNER,COLLABORATOR` |
 | `dry_run` | Print payloads without posting when set to `1` | `0` |
 | `debug_level` | Debug verbosity from `0` to `2` | `1` |
 | `stream_agent_messages` | Stream model output when set to `1` | `1` |
-| `extra_pip_args` | Additional pip installation flags | Empty |
 
 ## Review Output
 
-- A rocket reaction and short queued reply on the review request.
+- A rocket reaction and short queued reply on the review request; the queued
+  reply is removed after the summary posts.
 - Inline comments anchored to current diff lines.
 - A refreshed PR summary with new findings, still-relevant prior findings,
-  observed model responses, token usage, and estimated cost.
+  observed model responses, token usage, estimated cost, and time elapsed
+  (for example `- Time elapsed: 4m 32s`).
 - No comment when an inline finding cannot be anchored safely; the summary reports dropped findings.
 
 Prior unresolved Codex-authored threads are supplied as context so repeated requested reviews avoid duplicating findings and can identify which earlier findings remain relevant.
@@ -112,11 +142,11 @@ does not expose every pricing dimension.
 
 ## Security
 
-- The bundled workflow has no `pull_request` trigger and requires an explicit `/codex review` comment.
+- The bundled workflow has no `pull_request` trigger and requires an explicit `/review` or `/verify` comment.
 - It verifies that the PR head belongs to the same repository before checkout or API-key exposure.
-- It disables live web search for comment-triggered reviews.
+- It disables live web search for comment-triggered runs.
 - It grants `contents: read`, `pull-requests: write`, and `issues: write`; it never receives content write access.
-- The CLI validates the commenter association before starting a requested review.
+- The CLI validates the commenter association before starting a requested review or verification.
 
 ## Local Development
 

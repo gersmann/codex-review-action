@@ -400,7 +400,7 @@ class CodexClient:
         return bool(self.config.stream_output and not suppress_stream)
 
     def _resolve_effort(self, reasoning_effort: str | None) -> str:
-        value = reasoning_effort or self.config.reasoning_effort or "medium"
+        value = reasoning_effort or self.config.reasoning_effort
         try:
             return normalize_reasoning_effort(value)
         except ValueError as error:
@@ -420,11 +420,11 @@ class CodexClient:
         return resolved_api_key or None
 
     def _codex_web_search_mode(self) -> Literal["disabled", "cached", "live"]:
-        mode = self.config.web_search_mode or "live"
+        mode = self.config.web_search_mode or "disabled"
         if mode in _WEB_SEARCH_MODE_VALUES:
             return cast(Literal["disabled", "cached", "live"], mode)
-        self._debug(1, f"Invalid web search mode '{mode}', falling back to 'live'")
-        return "live"
+        self._debug(1, f"Invalid web search mode '{mode}', falling back to 'disabled'")
+        return "disabled"
 
     def _codex_process_env(self) -> dict[str, str] | None:
         codex_home = os.environ.get("CODEX_HOME")

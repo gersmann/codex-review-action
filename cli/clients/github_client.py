@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from github import Github
 
@@ -15,10 +16,20 @@ from ..core.github_types import (
     StatusCodeErrorProtocol,
 )
 from ..core.models import (
+    AckComment,
     InlineCommentPayload,
     ReviewThreadComment,
     ReviewThreadSnapshot,
 )
+
+ACK_BODY_TEMPLATE = "@{login}, your Codex {kind} has been queued."
+
+_ACK_BODY_PATTERN = re.compile(r"\A@\S+, your Codex (?:review|verification) has been queued\.\Z")
+
+
+def is_ack_body(body: str) -> bool:
+    """True when the body is an acknowledgement posted by acknowledge_review_request."""
+    return _ACK_BODY_PATTERN.match(body.strip()) is not None
 
 
 class GitHubClientProtocol(Protocol):
@@ -38,13 +49,16 @@ class GitHubClientProtocol(Protocol):
         pr: PullRequestLikeProtocol,
         comment_id: int,
         text: str,
-    ) -> None: ...
-    def post_issue_comment(self, pr: PullRequestLikeProtocol, text: str) -> None: ...
+    ) -> int: ...
+    def post_issue_comment(self, pr: PullRequestLikeProtocol, text: str) -> int: ...
     def acknowledge_review_request(
         self,
         pr_number: int,
         request: ReviewRequestContext,
-    ) -> None: ...
+        *,
+        kind: Literal["review", "verification"] = "review",
+    ) -> AckComment: ...
+    def delete_ack_comment(self, pr_number: int, ack: AckComment) -> None: ...
 
 
 class GitHubClient:
@@ -123,13 +137,14 @@ class GitHubClient:
         pr: PullRequestLikeProtocol,
         comment_id: int,
         text: str,
-    ) -> None:
+    ) -> int:
         try:
-            self._post_pr_resource(
+            response = self._post_pr_resource(
                 pr,
                 f"comments/{comment_id}/replies",
                 {"body": text},
             )
+            return _extract_comment_id(response)
         except Exception as exc:
             raise _wrap_github_error(
                 f"failed replying to review comment {comment_id} on PR #{pr.number}",
@@ -140,9 +155,10 @@ class GitHubClient:
         self,
         pr: PullRequestLikeProtocol,
         text: str,
-    ) -> None:
+    ) -> int:
         try:
-            pr.as_issue().create_comment(text)
+            created = pr.as_issue().create_comment(text)
+            return _extract_comment_id(created)
         except Exception as exc:
             raise _wrap_github_error(
                 f"failed posting issue comment on PR #{pr.number}",
@@ -153,15 +169,16 @@ class GitHubClient:
         self,
         pr_number: int,
         request: ReviewRequestContext,
-    ) -> None:
+        *,
+        kind: Literal["review", "verification"] = "review",
+    ) -> AckComment:
         pr = self.get_pr(pr_number)
-        message = f"@{request.commenter_login}, your Codex review has been queued."
+        message = ACK_BODY_TEMPLATE.format(login=request.commenter_login, kind=kind)
         try:
+            repository_url = pr.url.rsplit("/pulls/", 1)[0]
             if request.event_name == "issue_comment":
-                repository_url = pr.url.rsplit("/pulls/", 1)[0]
                 reaction_url = f"{repository_url}/issues/comments/{request.comment_id}/reactions"
             else:
-                repository_url = pr.url.rsplit("/pulls/", 1)[0]
                 reaction_url = f"{repository_url}/pulls/comments/{request.comment_id}/reactions"
 
             pr._requester.requestJsonAndCheck(
@@ -170,12 +187,28 @@ class GitHubClient:
                 input={"content": "rocket"},
             )
             if request.event_name == "issue_comment":
-                self.post_issue_comment(pr, message)
+                ack_comment_id = self.post_issue_comment(pr, message)
             else:
-                self.reply_to_review_comment(pr, request.comment_id, message)
+                ack_comment_id = self.reply_to_review_comment(pr, request.comment_id, message)
+            return AckComment(comment_id=ack_comment_id, event_name=request.event_name)
         except Exception as exc:
             raise _wrap_github_error(
                 f"failed acknowledging review request on PR #{pr.number}",
+                exc,
+            ) from exc
+
+    def delete_ack_comment(self, pr_number: int, ack: AckComment) -> None:
+        pr = self.get_pr(pr_number)
+        repository_url = pr.url.rsplit("/pulls/", 1)[0]
+        if ack.event_name == "issue_comment":
+            url = f"{repository_url}/issues/comments/{ack.comment_id}"
+        else:
+            url = f"{repository_url}/pulls/comments/{ack.comment_id}"
+        try:
+            pr._requester.requestJsonAndCheck("DELETE", url)
+        except Exception as exc:
+            raise _wrap_github_error(
+                f"failed deleting acknowledgement comment {ack.comment_id} on PR #{pr.number}",
                 exc,
             ) from exc
 
@@ -394,6 +427,24 @@ def _normalize_comment(comment: Mapping[str, object]) -> ReviewThreadComment | N
         original_line=original_line,
         author=login,
     )
+
+
+def _extract_comment_id(response: object) -> int:
+    """Extract the numeric comment id from a created-comment response.
+
+    Accepts a PyGithub comment object (``.id``), a raw payload mapping, or a
+    ``(headers, data)`` tuple as returned by ``Requester.requestJsonAndCheck``.
+    """
+    data = response
+    if isinstance(data, tuple) and len(data) == 2:
+        data = data[1]
+    if isinstance(data, Mapping):
+        candidate = data.get("id")
+    else:
+        candidate = getattr(data, "id", None)
+    if isinstance(candidate, int):
+        return candidate
+    raise GitHubAPIError("GitHub comment response did not include a numeric id")
 
 
 def _wrap_github_error(message: str, exc: Exception) -> GitHubAPIError:

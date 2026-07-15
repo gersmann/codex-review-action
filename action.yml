@@ -14,13 +14,16 @@ inputs:
     required: false
     default: "gpt-5.6-luna"
   reasoning_effort:
-    description: "Reasoning effort: none | minimal | low | medium | high | xhigh | max"
+    description: >-
+      Reasoning effort: none | minimal | low | medium | high | xhigh | max.
+      Leave empty (the default) to use the model-dependent default:
+      xhigh for gpt-5.6-luna, medium for gpt-5.6-terra and gpt-5.6-sol.
     required: false
-    default: "high"
+    default: ""
   web_search_mode:
     description: "Web search mode: disabled | cached | live"
     required: false
-    default: "live"
+    default: "disabled"
   debug_level:
     description: "Debug verbosity: 0 (off), 1 (basic), 2 (trace)"
     required: false
@@ -39,10 +42,6 @@ inputs:
     default: "MEMBER,OWNER,COLLABORATOR"
   additional_prompt:
     description: "Extra reviewer instructions appended to the review prompt (verbatim)"
-    required: false
-    default: ""
-  extra_pip_args:
-    description: "Additional pip arguments (e.g., --index-url)"
     required: false
     default: ""
 
@@ -95,7 +94,7 @@ runs:
       run: |
         set -euo pipefail
         python3 -m pip install --upgrade pip
-        python3 -m pip install ${{ inputs.extra_pip_args }} -r "${{ github.action_path }}/requirements.txt"
+        python3 -m pip install -r "${{ github.action_path }}/requirements.txt"
 
     - name: Run Codex review (CLI)
       id: run_codex_cli

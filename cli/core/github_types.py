@@ -73,6 +73,7 @@ class IssueCommentLikeProtocol(Protocol):
 
 @runtime_checkable
 class ReviewCommentLikeProtocol(Protocol):
+    id: int
     body: str | None
     path: str | None
     line: int | None
@@ -91,7 +92,9 @@ class ReviewLikeProtocol(Protocol):
 
 @runtime_checkable
 class RequesterLikeProtocol(Protocol):
-    def requestJsonAndCheck(self, verb: str, url: str, input: dict[str, Any]) -> object: ...
+    def requestJsonAndCheck(
+        self, verb: str, url: str, input: dict[str, Any] | None = None
+    ) -> object: ...
 
     def graphql_query(
         self, query: str, variables: Mapping[str, object]

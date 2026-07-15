@@ -8,7 +8,11 @@ import pytest
 from codex import TurnOptions
 from codex.protocol import types as protocol
 
-from cli.core.reasoning_effort import REASONING_EFFORT_VALUES, normalize_reasoning_effort
+from cli.core.reasoning_effort import (
+    REASONING_EFFORT_VALUES,
+    default_reasoning_effort_for_model,
+    normalize_reasoning_effort,
+)
 from cli.main import create_parser
 
 
@@ -42,6 +46,21 @@ def test_normalize_reasoning_effort_rejects_unknown_value() -> None:
         normalize_reasoning_effort("extreme")
 
 
+@pytest.mark.parametrize(
+    ("model_name", "expected_effort"),
+    [
+        ("gpt-5.6-luna", "xhigh"),
+        ("gpt-5.6-terra", "medium"),
+        ("gpt-5.6-sol", "medium"),
+        ("GPT-5.6-LUNA", "xhigh"),
+        ("gpt-9-unknown", "high"),
+        ("", "high"),
+    ],
+)
+def test_default_reasoning_effort_for_model(model_name: str, expected_effort: str) -> None:
+    assert default_reasoning_effort_for_model(model_name) == expected_effort
+
+
 def test_parser_normalizes_reasoning_effort_alias() -> None:
     args = create_parser().parse_args(["--reasoning-effort", "x-high"])
 
@@ -61,6 +80,21 @@ def test_validation_module_reads_action_input_from_environment() -> None:
 
     assert result.returncode == 0
     assert result.stdout.strip() == "xhigh"
+
+
+def test_validation_module_accepts_empty_action_input_as_unset() -> None:
+    env = os.environ | {"CODEX_REASONING_EFFORT_INPUT": ""}
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cli.core.reasoning_effort"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
 
 
 def test_validation_module_exits_two_for_unknown_action_input() -> None:

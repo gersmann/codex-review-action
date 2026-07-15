@@ -47,6 +47,16 @@ def test_load_guidelines_include_integration_addendum() -> None:
     assert "may have changed after your knowledge cutoff" in guidelines
 
 
+def test_load_verify_guidelines() -> None:
+    from cli.review.review_prompt import load_verify_guidelines
+
+    guidelines = load_verify_guidelines(_make_review_config())
+
+    assert "adjudicating" in guidelines
+    assert '"verdict": "correct" | "incorrect" | "uncertain"' in guidelines
+    assert "may have changed after your knowledge cutoff" in guidelines
+
+
 def test_review_base_instructions_have_no_repo_standard_reference() -> None:
     workflow = ReviewWorkflow(
         _make_review_config(),

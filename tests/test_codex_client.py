@@ -87,6 +87,7 @@ def _make_config(*, debug_level: int = 0, stream_output: bool = False) -> Review
         repository="o/r",
         pr_number=1,
         openai_api_key="test-key",
+        reasoning_effort="high",
         stream_output=stream_output,
         debug_level=debug_level,
     )
@@ -374,7 +375,7 @@ def test_execute_text_streams_agent_message_from_protocol_deltas(
     assert output == "Hello"
     assert _FakeCodex.thread.calls[0].prompt == "prompt"
     assert _root_value(_FakeCodex.last_thread_options.sandbox) == "danger-full-access"
-    assert _FakeCodex.last_thread_options.config.web_search == "live"
+    assert _FakeCodex.last_thread_options.config.web_search == "disabled"
     turn_options = _FakeCodex.thread.calls[0].turn_options
     assert turn_options is not None
     assert _root_value(turn_options.effort) == "high"
