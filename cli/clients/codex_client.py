@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from ..core.config import ReviewConfig, make_debug
 from ..core.exceptions import CodexExecutionError
 from ..core.reasoning_effort import normalize_reasoning_effort
+from ..core.review_usage import ReviewUsage, ReviewUsageAccumulator
 from .codex_event_debugger import CodexEventDebugger
 
 _SANDBOX_MODE_VALUES = {"read-only", "workspace-write", "danger-full-access"}
@@ -84,6 +85,11 @@ class CodexClient:
             debug_level=config.debug_level,
             debug_fn=self._debug,
         )
+        self._usage_accumulator = ReviewUsageAccumulator()
+
+    @property
+    def usage(self) -> ReviewUsage | None:
+        return self._usage_accumulator.usage
 
     def execute_text(
         self,
@@ -294,6 +300,10 @@ class CodexClient:
             "task_complete": False,
         }
         self._emit_debug_event(event)
+
+        if isinstance(event, protocol.ThreadTokenUsageUpdatedNotificationModel):
+            self._usage_accumulator.record(event)
+            return state
 
         if isinstance(event, protocol.ItemAgentMessageDeltaNotification):
             self._handle_agent_message_delta_event(

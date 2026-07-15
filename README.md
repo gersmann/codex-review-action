@@ -97,8 +97,31 @@ jobs:
 - **Request acknowledgment** as a rocket reaction and a short queued reply. An
   inline request receives an inline reply; a PR comment receives a PR comment.
 - **Inline comments** anchored to exact diff lines. If a line isn't in the current diff, the finding is skipped.
-- **PR-level summary** as an issue comment on each run (refreshed on re-runs; prior summaries are deleted).
+- **PR-level summary** with findings, observed response count, token totals and
+  breakdowns, and estimated cost (refreshed on re-runs; prior summaries are
+  deleted).
 - **Multi-line suggestions** only when contiguous and short; otherwise a single-line comment.
+
+## Usage and Cost Estimates
+
+The summary prices observed token usage with the following static rates per
+million tokens, taken from the official model pages for
+[Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna),
+[Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra), and
+[Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol):
+
+| Model | Input | Cached input | Output |
+|-------|------:|-------------:|-------:|
+| `gpt-5.6-luna` | $1.00 | $0.10 | $6.00 |
+| `gpt-5.6-terra` | $2.50 | $0.25 | $15.00 |
+| `gpt-5.6-sol` | $5.00 | $0.50 | $30.00 |
+
+Cached input is included in the reported input total and priced at its lower
+rate. Reasoning output is included in output tokens and is shown as a breakdown,
+not charged a second time. The amount is an estimate because provider pricing
+can change and the protocol does not expose every pricing dimension, such as
+cache-write tokens. Update `cli/core/model_pricing.py` when provider rates
+change.
 
 ## Deduplication on Repeated Runs
 

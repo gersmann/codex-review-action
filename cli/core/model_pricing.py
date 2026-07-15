@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from .review_usage import ReviewUsage
+
+
 @dataclass(frozen=True)
 class ModelPricing:
     input_per_million: Decimal
@@ -29,3 +32,15 @@ MODEL_PRICING = {
 }
 
 SUPPORTED_REVIEW_MODELS = tuple(MODEL_PRICING)
+
+
+def estimate_review_cost(model_name: str, usage: ReviewUsage) -> Decimal:
+    pricing = MODEL_PRICING[model_name]
+    cached_input_tokens = min(usage.cached_input_tokens, usage.input_tokens)
+    uncached_input_tokens = usage.input_tokens - cached_input_tokens
+    cost = (
+        Decimal(uncached_input_tokens) * pricing.input_per_million
+        + Decimal(cached_input_tokens) * pricing.cached_input_per_million
+        + Decimal(usage.output_tokens) * pricing.output_per_million
+    )
+    return cost / Decimal(1_000_000)

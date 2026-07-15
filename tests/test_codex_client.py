@@ -13,6 +13,7 @@ from codex.protocol import types as protocol
 from cli.clients.codex_client import CodexClient
 from cli.core.config import ReviewConfig
 from cli.core.exceptions import CodexExecutionError
+from cli.core.review_usage import ReviewUsage
 
 
 @dataclass
@@ -147,6 +148,75 @@ def _turn_completed(status: str = "completed", message: str | None = None) -> An
     if message is not None:
         turn_payload["error"] = {"message": message}
     return protocol.TurnCompletedNotificationModel.model_validate(payload)
+
+
+def _token_usage(
+    *,
+    input_tokens: int,
+    cached_input_tokens: int,
+    output_tokens: int,
+    reasoning_output_tokens: int,
+    total_tokens: int,
+) -> protocol.ThreadTokenUsageUpdatedNotificationModel:
+    usage = {
+        "inputTokens": input_tokens,
+        "cachedInputTokens": cached_input_tokens,
+        "outputTokens": output_tokens,
+        "reasoningOutputTokens": reasoning_output_tokens,
+        "totalTokens": total_tokens,
+    }
+    return protocol.ThreadTokenUsageUpdatedNotificationModel.model_validate(
+        {
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "tokenUsage": {"last": usage, "total": usage},
+            },
+        }
+    )
+
+
+def test_codex_client_aggregates_distinct_usage_updates(monkeypatch) -> None:
+    first = _token_usage(
+        input_tokens=100,
+        cached_input_tokens=20,
+        output_tokens=30,
+        reasoning_output_tokens=10,
+        total_tokens=130,
+    )
+    second = _token_usage(
+        input_tokens=40,
+        cached_input_tokens=5,
+        output_tokens=15,
+        reasoning_output_tokens=4,
+        total_tokens=55,
+    )
+    second.params.tokenUsage.total.inputTokens = 140
+    second.params.tokenUsage.total.cachedInputTokens = 25
+    second.params.tokenUsage.total.outputTokens = 45
+    second.params.tokenUsage.total.reasoningOutputTokens = 14
+    second.params.tokenUsage.total.totalTokens = 185
+    _FakeCodex.thread = _FakeThread(
+        [
+            _FakeStream(
+                iter([first, first, second, _turn_completed()]),
+                final_text="done",
+            )
+        ]
+    )
+    monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
+    client = CodexClient(_make_config())
+
+    assert client.execute_text("prompt") == "done"
+    assert client.usage == ReviewUsage(
+        response_count=2,
+        input_tokens=140,
+        cached_input_tokens=25,
+        output_tokens=45,
+        reasoning_output_tokens=14,
+        total_tokens=185,
+    )
 
 
 def _reasoning_item_completed(

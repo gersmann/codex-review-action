@@ -97,6 +97,9 @@ Review posting behavior:
   the request.
 - Codex posts a PR-level issue comment with a review summary.
 - Findings are posted as standalone inline PR review comments on the relevant lines.
+- The summary includes the selected model and reasoning effort, observed model
+  response count, total/input/cached/output/reasoning token breakdowns, and an
+  estimated cost from the static Luna, Terra, and Sol pricing registry.
 
 Comment-triggered reviews
 
