@@ -18,6 +18,7 @@ from .core.model_pricing import SUPPORTED_REVIEW_MODELS
 from .core.models import AckComment
 from .core.reasoning_effort import REASONING_EFFORT_VALUES, normalize_reasoning_effort
 from .workflows.review_workflow import ReviewWorkflow
+from .workflows.verify_workflow import VerifyTarget, VerifyWorkflow
 
 LOGGER = logging.getLogger(__name__)
 
@@ -210,11 +211,6 @@ def _handle_comment_event(
         return 0
 
     overrides = _parse_codex_command(command)
-    if overrides is None or overrides.action != "review":
-        print(
-            "Ignoring command because this action is review-only. Use /review to request a review."
-        )
-        return 0
 
     if not _is_commenter_allowed(config, comment):
         return 0
@@ -223,29 +219,64 @@ def _handle_comment_event(
     if pr_number is None:
         raise ConfigurationError("This workflow must be triggered by a PR-related event")
 
-    config_kwargs: dict[str, object] = {
-        "pr_number": pr_number,
-        "force_fresh_review": (
+    config_kwargs: dict[str, object] = {"pr_number": pr_number}
+    if overrides.action == "review":
+        config_kwargs["force_fresh_review"] = (
             overrides.model_name is not None or overrides.reasoning_effort is not None
-        ),
-    }
+        )
     if overrides.model_name is not None:
         config_kwargs["model_name"] = overrides.model_name
     if overrides.reasoning_effort is not None:
         config_kwargs["reasoning_effort"] = overrides.reasoning_effort
 
-    review_config = ReviewConfig.from_args(**config_kwargs)
+    run_config = ReviewConfig.from_args(**config_kwargs)
     request = _review_request_context(comment)
+
+    target: VerifyTarget | None = None
+    if overrides.action == "verify":
+        target = _verify_target_from_comment(comment, overrides.claim, request.event_name)
+        target.ensure_verifiable()
+
     github_client: GitHubClient | None = None
     ack: AckComment | None = None
     if not config.dry_run:
         github_client = GitHubClient(config)
-        ack = github_client.acknowledge_review_request(pr_number, request)
+        ack = github_client.acknowledge_review_request(
+            pr_number,
+            request,
+            kind="verification" if target is not None else "review",
+        )
 
-    exit_code = _run_review_workflow(review_config)
+    if target is not None:
+        exit_code = _run_verify_workflow(run_config, target)
+    else:
+        exit_code = _run_review_workflow(run_config)
+
     if exit_code == 0 and github_client is not None and ack is not None:
         _delete_ack_comment_best_effort(github_client, pr_number, ack)
     return exit_code
+
+
+def _verify_target_from_comment(
+    comment: dict[str, Any],
+    claim: str,
+    event_name: str,
+) -> VerifyTarget:
+    if event_name != "pull_request_review_comment":
+        return VerifyTarget(claim=claim, thread_root_id=None)
+    comment_id = comment.get("id")
+    in_reply_to = comment.get("in_reply_to_id")
+    root_id = in_reply_to if isinstance(in_reply_to, int) else comment_id
+    if not isinstance(root_id, int):
+        raise ConfigurationError("Verify request comment is missing a numeric id")
+    path = comment.get("path")
+    line = comment.get("line")
+    return VerifyTarget(
+        claim=claim,
+        thread_root_id=root_id,
+        path=path if isinstance(path, str) else "",
+        line=line if isinstance(line, int) else None,
+    )
 
 
 def _delete_ack_comment_best_effort(
@@ -289,13 +320,29 @@ def _extract_event_comment(actions_event: dict[str, Any] | None) -> dict[str, An
     return comment if isinstance(comment, dict) else None
 
 
-def _parse_codex_command(command: str) -> _CodexCommandRequest | None:
+_MODEL_SHORTHANDS = ("luna", "sol", "terra")
+_MODEL_SHORTHAND_PREFIX = "gpt-5.6"
+
+
+def _expand_model_shorthand(value: str) -> str:
+    """Expand a bare model shorthand ("luna") to its full name ("gpt-5.6-luna")."""
+    normalized = value.lower()
+    if normalized in _MODEL_SHORTHANDS:
+        return f"{_MODEL_SHORTHAND_PREFIX}-{normalized}"
+    return value
+
+
+def _record_option(values: dict[str, str], action: str, key: str, value: str) -> None:
+    if key in values:
+        raise ConfigurationError(f"Duplicate /{action} option: {key}")
+    values[key] = value
+
+
+def _parse_codex_command(command: str) -> _CodexCommandRequest:
     tokens = command.split()
-    if not tokens:
-        return None
-    action_token = tokens[0].lower()
+    action_token = tokens[0].lower() if tokens else ""
     if action_token not in {"review", "verify"}:
-        return None
+        raise ConfigurationError(f"Unsupported Codex command: {command!r}")
     action = cast(Literal["review", "verify"], action_token)
 
     values: dict[str, str] = {}
@@ -303,12 +350,22 @@ def _parse_codex_command(command: str) -> _CodexCommandRequest | None:
     for token in tokens[1:]:
         key, separator, value = token.partition(":")
         normalized_key = key.lower()
-        if separator and normalized_key in {"model", "reasoning"} and not claim_words:
+        if claim_words:
+            claim_words.append(token)
+        elif separator and normalized_key in {"model", "reasoning"}:
             if not value:
                 raise ConfigurationError(f"Missing value for /{action} option: {normalized_key}")
-            if normalized_key in values:
-                raise ConfigurationError(f"Duplicate /{action} option: {normalized_key}")
-            values[normalized_key] = value
+            if normalized_key == "model":
+                value = _expand_model_shorthand(value)
+            _record_option(values, action, normalized_key, value)
+        elif separator and normalized_key in _MODEL_SHORTHANDS:
+            # "luna:high" sets both the model and its reasoning effort.
+            if not value:
+                raise ConfigurationError(f"Missing value for /{action} option: {normalized_key}")
+            _record_option(values, action, "model", _expand_model_shorthand(normalized_key))
+            _record_option(values, action, "reasoning", value)
+        elif not separator and normalized_key in _MODEL_SHORTHANDS:
+            _record_option(values, action, "model", _expand_model_shorthand(normalized_key))
         elif action == "verify":
             claim_words.append(token)
         else:
@@ -365,6 +422,16 @@ def _run_review_workflow(config: ReviewConfig) -> int:
             "\nReview completed: "
             f"{summary.overall_correctness}, {summary.current_findings_count} findings"
         )
+    return 0
+
+
+def _run_verify_workflow(config: ReviewConfig, target: VerifyTarget) -> int:
+    config.validate()
+    if config.pr_number is None:
+        raise ConfigurationError("--pr is required")
+    workflow = VerifyWorkflow(config)
+    result = workflow.process_verify(config.pr_number, target)
+    print(f"\nVerification completed: {result.verify.verdict}")
     return 0
 
 

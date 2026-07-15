@@ -73,6 +73,7 @@ class IssueCommentLikeProtocol(Protocol):
 
 @runtime_checkable
 class ReviewCommentLikeProtocol(Protocol):
+    id: int
     body: str | None
     path: str | None
     line: int | None

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from github import Github
 
@@ -20,6 +21,15 @@ from ..core.models import (
     ReviewThreadComment,
     ReviewThreadSnapshot,
 )
+
+ACK_BODY_TEMPLATE = "@{login}, your Codex {kind} has been queued."
+
+_ACK_BODY_PATTERN = re.compile(r"\A@\S+, your Codex (?:review|verification) has been queued\.\Z")
+
+
+def is_ack_body(body: str) -> bool:
+    """True when the body is an acknowledgement posted by acknowledge_review_request."""
+    return _ACK_BODY_PATTERN.match(body.strip()) is not None
 
 
 class GitHubClientProtocol(Protocol):
@@ -45,6 +55,8 @@ class GitHubClientProtocol(Protocol):
         self,
         pr_number: int,
         request: ReviewRequestContext,
+        *,
+        kind: Literal["review", "verification"] = "review",
     ) -> AckComment: ...
     def delete_ack_comment(self, pr_number: int, ack: AckComment) -> None: ...
 
@@ -157,9 +169,11 @@ class GitHubClient:
         self,
         pr_number: int,
         request: ReviewRequestContext,
+        *,
+        kind: Literal["review", "verification"] = "review",
     ) -> AckComment:
         pr = self.get_pr(pr_number)
-        message = f"@{request.commenter_login}, your Codex review has been queued."
+        message = ACK_BODY_TEMPLATE.format(login=request.commenter_login, kind=kind)
         try:
             repository_url = pr.url.rsplit("/pulls/", 1)[0]
             if request.event_name == "issue_comment":

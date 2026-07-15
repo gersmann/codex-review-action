@@ -118,6 +118,27 @@ def test_acknowledges_inline_comment_with_reaction_and_inline_reply(
     assert ack == AckComment(comment_id=999, event_name="pull_request_review_comment")
 
 
+def test_acknowledges_verify_request_with_verification_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client()
+    pr = _PR()
+    monkeypatch.setattr(client, "get_pr", lambda pr_number: cast(Any, pr))
+
+    ack = client.acknowledge_review_request(
+        17,
+        ReviewRequestContext(
+            comment_id=123,
+            commenter_login="octocat",
+            event_name="issue_comment",
+        ),
+        kind="verification",
+    )
+
+    assert pr.issue.comments == ["@octocat, your Codex verification has been queued."]
+    assert ack == AckComment(comment_id=888, event_name="issue_comment")
+
+
 def test_delete_ack_comment_deletes_issue_comment(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _client()
     pr = _PR()

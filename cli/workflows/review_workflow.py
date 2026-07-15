@@ -122,7 +122,7 @@ def _build_review_summary(
         summary_lines.append("")
         summary_lines.append(overall_explanation)
     summary_lines.extend(
-        _build_usage_summary_lines(
+        build_usage_summary_lines(
             model_name=model_name,
             reasoning_effort=reasoning_effort,
             usage=usage,
@@ -134,7 +134,7 @@ def _build_review_summary(
     return "\n".join(summary_lines)
 
 
-def _build_usage_summary_lines(
+def build_usage_summary_lines(
     *,
     model_name: str,
     reasoning_effort: str,

@@ -16,9 +16,9 @@ class ReviewPromptPullRequestProtocol(Protocol):
     base: BaseRefLikeProtocol | None
 
 
-def load_guidelines(config: ReviewConfig) -> str:
+def _load_prompt_file(config: ReviewConfig, filename: str) -> str:
     debug = make_debug(config)
-    builtin_path = Path(__file__).resolve().parents[2] / "prompts" / "review.md"
+    builtin_path = Path(__file__).resolve().parents[2] / "prompts" / filename
 
     try:
         debug(1, f"Using built-in prompt: {builtin_path}")
@@ -26,6 +26,14 @@ def load_guidelines(config: ReviewConfig) -> str:
     except Exception as exc:
         debug(1, f"Failed reading built-in prompt file {builtin_path}: {exc}")
         raise PromptError(f"Failed to read built-in guidelines file {builtin_path}: {exc}") from exc
+
+
+def load_guidelines(config: ReviewConfig) -> str:
+    return _load_prompt_file(config, "review.md")
+
+
+def load_verify_guidelines(config: ReviewConfig) -> str:
+    return _load_prompt_file(config, "verify.md")
 
 
 def compose_prompt(

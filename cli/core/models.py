@@ -193,6 +193,7 @@ class ReviewCommentSnapshot:
     diff_hunk: str = ""
     commit_id: str = ""
     in_reply_to_id: int | None = None
+    id: int | None = None
 
     @property
     def prompt_line(self) -> int | None:
@@ -201,6 +202,7 @@ class ReviewCommentSnapshot:
     @classmethod
     def from_review_comment(cls, comment: ReviewCommentLikeProtocol) -> ReviewCommentSnapshot:
         author_value = comment.user.login if comment.user is not None else None
+        comment_id = getattr(comment, "id", None)
         return cls(
             body=comment.body.strip() if isinstance(comment.body, str) else "",
             path=comment.path if isinstance(comment.path, str) else "",
@@ -213,6 +215,7 @@ class ReviewCommentSnapshot:
             in_reply_to_id=comment.in_reply_to_id
             if isinstance(comment.in_reply_to_id, int)
             else None,
+            id=comment_id if isinstance(comment_id, int) else None,
         )
 
 
