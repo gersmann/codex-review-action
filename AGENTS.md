@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `cli/`: Python source. Entry point `main.py`; config/models in `config.py`, `models.py`, `exceptions.py`; workflows in `workflows/review_workflow.py`, `workflows/edit_workflow.py`; prompts in `review_prompt.py`, `edit_prompt.py`; infrastructure in `codex_client.py`, `github_client.py`, `git_ops.py`; review helpers in `review/dedupe.py`, `review/posting.py`; diff utilities in `patch_parser.py`, `anchor_engine.py`; context in `context_manager.py`.
+- `cli/`: Python source. Entry point `main.py`; config/models in `config.py`, `models.py`, `exceptions.py`; workflow in `workflows/review_workflow.py`; prompt composition in `review/review_prompt.py`; infrastructure in `codex_client.py`, `github_client.py`, `git_ops.py`; review helpers in `review/dedupe.py`, `review/posting.py`; diff utilities in `patch_parser.py`, `anchor_engine.py`; context in `context_manager.py`.
 - `prompts/`: Review guidelines (`review.md`).
 - `action.yml`: Composite GitHub Action definition and inputs.
 - `Makefile`: QA tasks (`fmt`, `lint`, `type`, `qa`).
@@ -9,7 +9,7 @@
 
 ## Build, Test, and Development Commands
 - `make lint` – Ruff lint + autofix.
-- Run locally: `GITHUB_TOKEN=... OPENAI_API_KEY=... PYTHONPATH=. python -m cli.main --repo owner/repo --pr 123 [--mode review|act] [--dry-run] [--debug 1]`.
+- Run locally: `GITHUB_TOKEN=... OPENAI_API_KEY=... PYTHONPATH=. python -m cli.main --repo owner/repo --pr 123 [--dry-run] [--debug 1]`.
 
 ## Coding Style & Naming Conventions
 - Python 3.12, 4‑space indent, `snake_case` for functions/variables, `PascalCase` for classes, constants `UPPER_SNAKE`.

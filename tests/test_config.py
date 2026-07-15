@@ -6,6 +6,23 @@ from cli.core.config import ReviewConfig
 from cli.core.exceptions import ConfigurationError
 
 
+def test_config_uses_luna_high_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.delenv("CODEX_REASONING_EFFORT", raising=False)
+
+    config = ReviewConfig.from_args(
+        github_token="token",
+        repository="owner/repo",
+        pr_number=1,
+        openai_api_key="test-key",
+    )
+
+    assert config.model_name == "gpt-5.6-luna"
+    assert config.reasoning_effort == "high"
+
+
 def test_from_args_rejects_unknown_keys() -> None:
     with pytest.raises(ConfigurationError, match="Unknown configuration arguments"):
         ReviewConfig.from_args(github_token="t", repository="o/r", unknown_flag="x")
@@ -17,13 +34,11 @@ def test_from_args_overrides_known_values_without_environment() -> None:
         repository="owner/repo",
         pr_number=1,
         openai_api_key="test-key",
-        mode="review",
         debug_level=2,
     )
 
     assert config.github_token == "token"
     assert config.repository == "owner/repo"
-    assert config.mode == "review"
     assert config.debug_level == 2
 
 
@@ -81,7 +96,6 @@ def test_from_args_merges_cli_values_with_partial_environment(
     config = ReviewConfig.from_args(
         repository="owner/repo",
         pr_number=19,
-        mode="review",
         debug_level=1,
     )
 
@@ -195,10 +209,10 @@ def test_is_commenter_allowed_checks_normalized_association() -> None:
     assert config.is_commenter_allowed("member") is False
 
 
-def test_validate_requires_pr_number_in_review_mode() -> None:
-    config = ReviewConfig(github_token="token", repository="owner/repo", mode="review")
+def test_validate_requires_pr_number() -> None:
+    config = ReviewConfig(github_token="token", repository="owner/repo")
 
-    with pytest.raises(ConfigurationError, match="PR number is required in review mode"):
+    with pytest.raises(ConfigurationError, match="PR number is required"):
         config.validate()
 
 

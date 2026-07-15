@@ -15,14 +15,12 @@ _CONFIG_OVERRIDE_KEYS = frozenset(
         "github_token",
         "repository",
         "pr_number",
-        "mode",
         "model_provider",
         "openai_api_key",
         "model_name",
         "reasoning_effort",
         "force_fresh_review",
         "web_search_mode",
-        "act_instructions",
         "debug_level",
         "stream_output",
         "dry_run",
@@ -52,14 +50,12 @@ class _ReviewConfigValues(TypedDict):
     github_token: str
     repository: str
     pr_number: int | None
-    mode: str
     model_provider: str
     openai_api_key: str
     model_name: str
     reasoning_effort: str
     force_fresh_review: bool
     web_search_mode: str
-    act_instructions: str
     debug_level: int
     stream_output: bool
     dry_run: bool
@@ -76,14 +72,12 @@ class ReviewConfig:
     github_token: str
     repository: str
     pr_number: int | None = None
-    mode: str = "review"  # "review" or "act"
     model_provider: str = "openai"
     openai_api_key: str = ""
     model_name: str = "gpt-5.6-luna"
     reasoning_effort: str = "high"
     force_fresh_review: bool = False
     web_search_mode: str = "live"
-    act_instructions: str = ""
     debug_level: int = 0
     stream_output: bool = True
     dry_run: bool = False
@@ -138,13 +132,10 @@ class ReviewConfig:
         if self.pr_number is not None and self.pr_number <= 0:
             raise ConfigurationError("PR number must be positive")
 
-        if self.mode not in ("review", "act"):
-            raise ConfigurationError(f"Invalid mode: {self.mode}. Must be 'review' or 'act'")
+        if self.pr_number is None:
+            raise ConfigurationError("PR number is required")
 
-        if self.mode == "review" and self.pr_number is None:
-            raise ConfigurationError("PR number is required in review mode")
-
-        if self.mode == "review" and self.model_name not in SUPPORTED_REVIEW_MODELS:
+        if self.model_name not in SUPPORTED_REVIEW_MODELS:
             raise ConfigurationError(
                 f"Unsupported review model: {self.model_name}. Supported models: "
                 f"{', '.join(SUPPORTED_REVIEW_MODELS)}"
@@ -182,7 +173,7 @@ class ReviewConfig:
             )
 
     def is_commenter_allowed(self, author_association: str | None) -> bool:
-        """Return True when the comment author is allowed to trigger edit mode."""
+        """Return True when the comment author is allowed to trigger a review."""
         if not author_association:
             return False
         normalized = author_association.strip().upper()
@@ -289,14 +280,12 @@ def _config_values_from_environment() -> _ReviewConfigValues:
         "github_token": github_token,
         "repository": repository,
         "pr_number": pr_number,
-        "mode": os.environ.get("CODEX_MODE", "review").strip(),
         "model_provider": os.environ.get("CODEX_PROVIDER", "openai").strip(),
         "openai_api_key": openai_api_key,
         "model_name": os.environ.get("CODEX_MODEL", "gpt-5.6-luna").strip(),
         "reasoning_effort": os.environ.get("CODEX_REASONING_EFFORT", "high").strip(),
         "force_fresh_review": False,
         "web_search_mode": os.environ.get("CODEX_WEB_SEARCH_MODE", "live").strip(),
-        "act_instructions": os.environ.get("CODEX_ACT_INSTRUCTIONS", "").strip(),
         "debug_level": _parse_debug_level(os.environ.get("DEBUG_CODEREVIEW", "0")),
         "stream_output": os.environ.get("STREAM_AGENT_MESSAGES", "1") != "0",
         "dry_run": os.environ.get("DRY_RUN") == "1",
@@ -322,10 +311,6 @@ def _apply_config_overrides(values: _ReviewConfigValues, kwargs: Mapping[str, An
     if pr_number is not None:
         values["pr_number"] = pr_number
 
-    mode = kwargs.get("mode")
-    if mode is not None:
-        values["mode"] = mode
-
     model_provider = kwargs.get("model_provider")
     if model_provider is not None:
         values["model_provider"] = model_provider
@@ -349,10 +334,6 @@ def _apply_config_overrides(values: _ReviewConfigValues, kwargs: Mapping[str, An
     web_search_mode = kwargs.get("web_search_mode")
     if web_search_mode is not None:
         values["web_search_mode"] = web_search_mode
-
-    act_instructions = kwargs.get("act_instructions")
-    if act_instructions is not None:
-        values["act_instructions"] = act_instructions
 
     debug_level = kwargs.get("debug_level")
     if debug_level is not None:

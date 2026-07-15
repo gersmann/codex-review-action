@@ -16,7 +16,6 @@ from .core.exceptions import CodexReviewError, ConfigurationError
 from .core.github_types import ReviewRequestContext
 from .core.model_pricing import SUPPORTED_REVIEW_MODELS
 from .core.reasoning_effort import REASONING_EFFORT_VALUES, normalize_reasoning_effort
-from .workflows.edit_workflow import EditWorkflow
 from .workflows.review_workflow import ReviewWorkflow
 
 LOGGER = logging.getLogger(__name__)
@@ -31,7 +30,7 @@ class _ReviewCommentOverrides:
 def create_parser() -> argparse.ArgumentParser:
     """Create the command line argument parser."""
     parser = argparse.ArgumentParser(
-        description="Autonomous code review using Codex",
+        description="Code review using Codex",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -73,14 +72,6 @@ Environment Variables:
     )
 
     parser.add_argument(
-        "--mode",
-        dest="mode",
-        choices=["review", "act"],
-        default="review",
-        help="Operation mode: 'review' (code review) or 'act' (autonomous editing) (default: review)",
-    )
-
-    parser.add_argument(
         "--provider",
         dest="model_provider",
         choices=["openai"],
@@ -108,12 +99,6 @@ Environment Variables:
         choices=["disabled", "cached", "live"],
         default="live",
         help="Web search mode (default: live)",
-    )
-
-    parser.add_argument(
-        "--act-instructions",
-        dest="act_instructions",
-        help="Additional instructions for act mode (autonomous editing)",
     )
 
     parser.add_argument(
@@ -162,13 +147,13 @@ def load_github_event() -> dict[str, Any]:
         raise ConfigurationError(f"Failed to load GitHub event data: {e}") from e
 
 
-def extract_edit_command(text: str) -> str | None:
-    """Extract a /codex edit command from a comment body.
+def extract_codex_command(text: str) -> str | None:
+    """Extract a /codex command from a comment body.
 
     Accepted forms:
       - "/codex <instructions>"
       - "/codex: <instructions>"
-    Returns the instruction text to pass to the coding agent, or None.
+    Returns the command text following `/codex`, or None.
     """
     if not text:
         return None
@@ -213,7 +198,7 @@ def _handle_comment_event(
         return None
 
     body = str(comment.get("body") or "")
-    command = extract_edit_command(body)
+    command = extract_codex_command(body)
     if not command:
         return 0
 
@@ -233,7 +218,6 @@ def _handle_comment_event(
         raise ConfigurationError("This workflow must be triggered by a PR-related event")
 
     config_kwargs: dict[str, object] = {
-        "mode": "review",
         "pr_number": pr_number,
         "force_fresh_review": (
             overrides.model_name is not None or overrides.reasoning_effort is not None
@@ -249,7 +233,7 @@ def _handle_comment_event(
     if not config.dry_run:
         GitHubClient(config).acknowledge_review_request(pr_number, request)
 
-    return _run_mode_workflow(review_config)
+    return _run_review_workflow(review_config)
 
 
 def _review_request_context(comment: dict[str, Any]) -> ReviewRequestContext:
@@ -321,21 +305,10 @@ def _is_commenter_allowed(config: ReviewConfig, comment: dict[str, Any]) -> bool
     return False
 
 
-def _run_mode_workflow(config: ReviewConfig) -> int:
+def _run_review_workflow(config: ReviewConfig) -> int:
     config.validate()
-    if config.mode == "act":
-        if not config.pr_number:
-            raise ConfigurationError("--pr is required in act mode")
-        if not config.act_instructions.strip():
-            raise ConfigurationError("--act-instructions is required in act mode")
-
-        edit_workflow = EditWorkflow(config)
-        return edit_workflow.process_edit_command(
-            config.act_instructions, config.pr_number, comment_ctx=None
-        )
-
     if config.pr_number is None:
-        raise ConfigurationError("--pr is required in review mode")
+        raise ConfigurationError("--pr is required")
     workflow = ReviewWorkflow(config)
     result = workflow.process_review(config.pr_number)
 
@@ -372,7 +345,7 @@ def main() -> int:
         if comment_result is not None:
             return comment_result
 
-        return _run_mode_workflow(config)
+        return _run_review_workflow(config)
 
     except KeyboardInterrupt:
         print("\nInterrupted by user", file=sys.stderr)

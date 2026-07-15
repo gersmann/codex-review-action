@@ -2,7 +2,7 @@
 # Minimal project metadata for uv; this is not published.
 name = "codex-review-action"
 version = "0.0.0"
-description = "GitHub Action for Codex autonomous PR reviews and edits"
+description = "GitHub Action for on-demand Codex pull request reviews"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

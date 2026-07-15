@@ -18,8 +18,6 @@ from ..core.models import (
     InlineCommentPayload,
     ReviewThreadComment,
     ReviewThreadSnapshot,
-    UnresolvedReviewComment,
-    UnresolvedReviewThread,
 )
 
 
@@ -28,9 +26,6 @@ class GitHubClientProtocol(Protocol):
 
     def get_pr(self, pr_number: int) -> PullRequestLikeProtocol: ...
     def get_review_threads(self, pr: PullRequestLikeProtocol) -> list[ReviewThreadSnapshot]: ...
-    def get_unresolved_threads(
-        self, pr: PullRequestLikeProtocol
-    ) -> list[UnresolvedReviewThread]: ...
     def post_inline_comment(
         self,
         pr: PullRequestLikeProtocol,
@@ -107,29 +102,6 @@ class GitHubClient:
             if not page.end_cursor:
                 raise GitHubAPIError("missing endCursor for paginated reviewThreads response")
             cursor = page.end_cursor
-
-    def get_unresolved_threads(self, pr: PullRequestLikeProtocol) -> list[UnresolvedReviewThread]:
-        unresolved_threads: list[UnresolvedReviewThread] = []
-        for thread in self.get_review_threads(pr):
-            if thread.is_resolved:
-                continue
-            unresolved_threads.append(
-                UnresolvedReviewThread(
-                    id=thread.id,
-                    comments=[
-                        UnresolvedReviewComment(
-                            id=comment.id,
-                            body=comment.body,
-                            path=comment.path,
-                            line=comment.line,
-                            original_line=comment.original_line,
-                            author=comment.author,
-                        )
-                        for comment in thread.comments
-                    ],
-                )
-            )
-        return unresolved_threads
 
     def post_inline_comment(
         self,

@@ -87,3 +87,39 @@ def test_github_actions_use_node_24_versions() -> None:
         "actions/cache/save@v4",
     ):
         assert node_20_action not in all_actions
+
+
+def test_production_code_has_no_autonomous_editing_implementation() -> None:
+    assert not (ROOT / "cli/workflows/edit_workflow.py").exists()
+    assert not (ROOT / "cli/workflows/edit_prompt.py").exists()
+
+    production_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in (ROOT / "cli").rglob("*.py")
+    )
+    for forbidden in ("EditWorkflow", "act_instructions", "address comments"):
+        assert forbidden not in production_text
+
+
+def test_documentation_describes_only_on_demand_reviews() -> None:
+    documentation = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            ROOT / "README.md",
+            ROOT / "cli/README.md",
+            ROOT / "pyproject.toml",
+            ROOT / "AGENTS.md",
+        )
+    ).lower()
+
+    for forbidden in (
+        "--mode",
+        "mode act",
+        "autonomous edit",
+        "edit_workflow",
+        "edit_prompt",
+        "codex_act_instructions",
+    ):
+        assert forbidden not in documentation
+
+    assert "gpt-5.6-luna" in documentation
+    assert "reasoning_effort: high" in documentation
