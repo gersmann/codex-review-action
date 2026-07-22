@@ -108,7 +108,7 @@ Comment-triggered edits
 | `GITHUB_TOKEN` | GitHub API token | *Required* |
 | `OPENAI_API_KEY` | OpenAI API key | *Required for OpenAI* |
 | `CODEX_MODE` | Operation mode (review/act) | `review` |
-| `CODEX_MODEL` | Model name | `gpt-5.4` |
+| `CODEX_MODEL` | Model name | `gpt-5.6-sol` |
 | `CODEX_PROVIDER` | Model provider | `openai` |
 | `CODEX_REASONING_EFFORT` | Reasoning effort level | `medium` |
 | `CODEX_ACT_INSTRUCTIONS` | Additional instructions for act mode | `` |

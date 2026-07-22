@@ -88,8 +88,8 @@ Environment Variables:
     parser.add_argument(
         "--model",
         dest="model_name",
-        default="gpt-5.4",
-        help="Model name (default: gpt-5.4)",
+        default="gpt-5.6-sol",
+        help="Model name (default: gpt-5.6-sol)",
     )
     parser.add_argument(
         "--reasoning-effort",

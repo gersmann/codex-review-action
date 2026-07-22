@@ -76,7 +76,7 @@ class ReviewConfig:
     mode: str = "review"  # "review" or "act"
     model_provider: str = "openai"
     openai_api_key: str = ""
-    model_name: str = "gpt-5.4"
+    model_name: str = "gpt-5.6-sol"
     reasoning_effort: str = "medium"
     web_search_mode: str = "live"
     act_instructions: str = ""
@@ -282,7 +282,7 @@ def _config_values_from_environment() -> _ReviewConfigValues:
         "mode": os.environ.get("CODEX_MODE", "review").strip(),
         "model_provider": os.environ.get("CODEX_PROVIDER", "openai").strip(),
         "openai_api_key": openai_api_key,
-        "model_name": os.environ.get("CODEX_MODEL", "gpt-5.4").strip(),
+        "model_name": os.environ.get("CODEX_MODEL", "gpt-5.6-sol").strip(),
         "reasoning_effort": os.environ.get("CODEX_REASONING_EFFORT", "medium").strip(),
         "web_search_mode": os.environ.get("CODEX_WEB_SEARCH_MODE", "live").strip(),
         "act_instructions": os.environ.get("CODEX_ACT_INSTRUCTIONS", "").strip(),
