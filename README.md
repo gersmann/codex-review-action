@@ -97,7 +97,7 @@ jobs:
 | `openai_api_key` | OpenAI API key | *required* |
 | `mode` | `review` or `act` | `review` |
 | **Model** | | |
-| `model` | Model name | `gpt-5.4` |
+| `model` | Model name | `gpt-5.6-sol` |
 | `reasoning_effort` | `minimal` / `low` / `medium` / `high` | `medium` |
 | **Review-only** | | |
 | `additional_prompt` | Extra reviewer instructions (verbatim) | |

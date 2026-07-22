@@ -129,6 +129,7 @@ def _agent_message_completed(
         {
             "method": "item/completed",
             "params": {
+                "completedAtMs": 0,
                 "threadId": "thread-1",
                 "turnId": "turn-1",
                 "item": item,
@@ -157,6 +158,7 @@ def _reasoning_item_completed(
         {
             "method": "item/completed",
             "params": {
+                "completedAtMs": 0,
                 "threadId": "thread-1",
                 "turnId": "turn-1",
                 "item": {
@@ -210,6 +212,7 @@ def _command_item_started(
         {
             "method": "item/started",
             "params": {
+                "startedAtMs": 0,
                 "threadId": "thread-1",
                 "turnId": "turn-1",
                 "item": {
@@ -233,6 +236,7 @@ def _command_item_completed(
         {
             "method": "item/completed",
             "params": {
+                "completedAtMs": 0,
                 "threadId": "thread-1",
                 "turnId": "turn-1",
                 "item": {

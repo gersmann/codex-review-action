@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any
 from ..core.exceptions import ReviewResumeError
 
 if TYPE_CHECKING:
-    from codex.app_server.models import ThreadListResult
     from codex.protocol import types as protocol
 
 SUMMARY_METADATA_RE = re.compile(r"<!--\s*codex-review-meta\s+({.*?})\s*-->")
@@ -154,8 +153,8 @@ def _list_stored_threads(*, codex_home: Path, cwd: Path) -> list[protocol.Thread
         ) from exc
 
 
-def _next_cursor(page: ThreadListResult) -> str | None:
-    next_cursor = page.next_cursor
+def _next_cursor(page: protocol.ThreadListResponse) -> str | None:
+    next_cursor = page.nextCursor
     if not isinstance(next_cursor, str):
         return None
     normalized = next_cursor.strip()

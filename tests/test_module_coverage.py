@@ -756,7 +756,7 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
         "steps.review_resume_state.outputs.restore_key == "
         "steps.review_resume_state.outputs.current_cache_key"
     ) in action_yaml
-    assert "model: gpt-5.4" in workflow_yaml
+    assert "model: gpt-5.6-sol" in workflow_yaml
     assert "model: gpt-5.1-codex-max" not in workflow_yaml
 
 
