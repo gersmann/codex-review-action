@@ -26,6 +26,9 @@ jobs:
       - name: Install dependencies (dev)
         run: uv sync --dev
 
+      - name: Check runtime dependency export
+        run: make check-requirements
+
       - name: Pre-commit (ruff format/check, mypy)
         run: uv run pre-commit run --all-files
 

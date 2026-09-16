@@ -156,6 +156,13 @@ GITHUB_TOKEN=… OPENAI_API_KEY=… PYTHONPATH=. python -m cli.main \
   --repo owner/repo --pr 123 --mode review --dry-run
 ```
 
+Runtime dependencies are declared in `pyproject.toml` and resolved in `uv.lock`.
+After updating the lockfile, run `make requirements` to regenerate the Action's
+`requirements.txt`; CI checks it with `make check-requirements`. The export pins
+runtime transitive dependencies as well as direct dependencies, so dependency
+updates take effect in a new Action revision. Installation still uses pip and
+supports `extra_pip_args`, including custom indexes that provide the pinned versions.
+
 Optional: test against a local checkout of `codex-python` instead of PyPI:
 
 ```bash

@@ -51,6 +51,7 @@ class _FakeThread:
         self.calls: list[_RunCall] = []
 
     def run(self, prompt: str, *, turn_options: Any | None = None) -> _FakeStream:
+        assert _FakeCodex.active
         self.calls.append(_RunCall(prompt=prompt, turn_options=turn_options))
         if not self._streams:
             raise AssertionError("No fake stream queued")
@@ -63,16 +64,34 @@ class _FakeCodex:
     last_resume_options: Any = None
     last_resume_thread_id: str | None = None
     resume_error: Exception | None = None
+    start_error: Exception | None = None
+    close_error: Exception | None = None
+    active = False
+    close_calls = 0
     thread: _FakeThread
 
     def __init__(self, options: Any) -> None:
         _FakeCodex.last_options = options
 
+    def __enter__(self) -> _FakeCodex:
+        _FakeCodex.active = True
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        _FakeCodex.active = False
+        _FakeCodex.close_calls += 1
+        if _FakeCodex.close_error is not None:
+            raise _FakeCodex.close_error
+
     def start_thread(self, options: Any) -> _FakeThread:
+        assert _FakeCodex.active
         _FakeCodex.last_thread_options = options
+        if _FakeCodex.start_error is not None:
+            raise _FakeCodex.start_error
         return _FakeCodex.thread
 
     def resume_thread(self, thread_id: str, options: Any) -> _FakeThread:
+        assert _FakeCodex.active
         _FakeCodex.last_resume_thread_id = thread_id
         _FakeCodex.last_resume_options = options
         if _FakeCodex.resume_error is not None:
@@ -97,6 +116,10 @@ def _reset_fake_codex() -> None:
     _FakeCodex.last_resume_options = None
     _FakeCodex.last_resume_thread_id = None
     _FakeCodex.resume_error = None
+    _FakeCodex.start_error = None
+    _FakeCodex.close_error = None
+    _FakeCodex.active = False
+    _FakeCodex.close_calls = 0
 
 
 def _agent_message_delta(delta: str) -> protocol.ItemAgentMessageDeltaNotification:
@@ -309,6 +332,7 @@ def test_execute_text_streams_agent_message_from_protocol_deltas(
     assert turn_options is not None
     assert _root_value(turn_options.effort) == "medium"
     assert _FakeCodex.last_options.config.show_raw_agent_reasoning is False
+    assert _FakeCodex.close_calls == 1
 
 
 def test_execute_text_does_not_duplicate_streamed_output_when_completion_arrives(
@@ -363,6 +387,42 @@ def test_execute_text_raises_on_thread_run_error(monkeypatch: pytest.MonkeyPatch
 
     with pytest.raises(CodexExecutionError, match="boom"):
         client.execute_text("prompt")
+    assert _FakeCodex.close_calls == 1
+
+
+def test_execute_text_closes_client_when_thread_creation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_fake_codex()
+    _FakeCodex.start_error = RuntimeError("cannot start thread")
+    monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
+    client = CodexClient(_make_config())
+
+    with pytest.raises(CodexExecutionError, match="cannot start thread"):
+        client.execute_text("prompt")
+
+    assert _FakeCodex.close_calls == 1
+
+
+@pytest.mark.parametrize("run_fails", [False, True])
+def test_execute_text_wraps_cleanup_failure_preserving_run_error_context(
+    monkeypatch: pytest.MonkeyPatch,
+    run_fails: bool,
+) -> None:
+    _reset_fake_codex()
+    run_error = ThreadRunError("turn failed") if run_fails else None
+    _FakeCodex.thread = _FakeThread([_FakeStream(iter(()), final_text="ok", wait_error=run_error)])
+    close_error = RuntimeError("close failed")
+    _FakeCodex.close_error = close_error
+    monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
+    client = CodexClient(_make_config())
+
+    with pytest.raises(CodexExecutionError, match="close failed") as exc_info:
+        client.execute_text("prompt")
+
+    assert exc_info.value.__cause__ is close_error
+    assert close_error.__context__ is run_error
+    assert _FakeCodex.close_calls == 1
 
 
 def test_execute_text_raises_on_failed_turn_event(
@@ -443,6 +503,33 @@ def test_execute_structured_runs_second_turn_with_schema(
     assert _FakeCodex.thread.calls[1].prompt == "Return the JSON now."
     assert _root_value(second_turn_options.effort) == "medium"
     assert second_turn_options.output_schema == schema
+    assert _FakeCodex.close_calls == 1
+
+
+@pytest.mark.parametrize("failing_turn", [1, 2])
+def test_execute_structured_closes_client_when_either_turn_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    failing_turn: int,
+) -> None:
+    _reset_fake_codex()
+    _FakeCodex.thread = _FakeThread(
+        [
+            _FakeStream(
+                iter(()),
+                final_text="ok",
+                wait_error=ThreadRunError("turn failed") if turn == failing_turn else None,
+            )
+            for turn in (1, 2)
+        ]
+    )
+    monkeypatch.setattr("cli.clients.codex_client.Codex", _FakeCodex)
+    client = CodexClient(_make_config())
+
+    with pytest.raises(CodexExecutionError, match="turn failed"):
+        client.execute_structured("prompt", output_schema={"type": "object"})
+
+    assert len(_FakeCodex.thread.calls) == failing_turn
+    assert _FakeCodex.close_calls == 1
 
 
 def test_execute_structured_raises_when_schema_turn_emits_no_output(
@@ -546,6 +633,7 @@ def test_execute_structured_resumes_existing_thread(
     assert _FakeCodex.last_options.env is not None
     assert _FakeCodex.last_options.env["CODEX_HOME"] == os.environ["CODEX_HOME"]
     assert _FakeCodex.last_options.env["PATH"] == "/usr/bin:/bin"
+    assert _FakeCodex.close_calls == 1
 
 
 def test_execute_structured_falls_back_to_fresh_thread_when_resume_fails(
@@ -577,6 +665,7 @@ def test_execute_structured_falls_back_to_fresh_thread_when_resume_fails(
     assert output == '{"summary":"ok"}'
     assert _FakeCodex.last_resume_thread_id == "thread-123"
     assert _FakeCodex.last_thread_options is not None
+    assert _FakeCodex.close_calls == 1
 
 
 def test_debug_level1_logs_token_usage_update_summary(

@@ -276,7 +276,7 @@ def test_model_helpers_parse_and_normalize_payloads() -> None:
         ],
     }
 
-    with pytest.raises(ReviewContractError, match="finding at index 1 must be an object"):
+    with pytest.raises(ReviewContractError, match="must be an object"):
         ReviewRunResult.from_payload(
             {
                 "overall_correctness": "ok",

@@ -224,6 +224,8 @@ def test_git_commit_paths_commits_when_staged_changes_exist(
         check: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         calls.append((args, check))
+        if args[:3] == ["diff", "--cached", "--name-only"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
         if args[:2] == ["add", "--"]:
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
         if args[:3] == ["diff", "--cached", "--quiet"]:
@@ -236,10 +238,94 @@ def test_git_commit_paths_commits_when_staged_changes_exist(
 
     assert git_ops.git_commit_paths("Codex edit: test", ["a.py"]) is True
     assert calls == [
+        (
+            [
+                "diff",
+                "--cached",
+                "--name-only",
+                "--no-renames",
+                "--diff-filter=D",
+                "-z",
+                "--",
+                "a.py",
+            ],
+            True,
+        ),
         (["add", "--", "a.py"], True),
-        (["diff", "--cached", "--quiet"], False),
-        (["commit", "-m", "Codex edit: test"], True),
+        (["diff", "--cached", "--quiet", "--", "a.py"], False),
+        (["commit", "--only", "-m", "Codex edit: test", "--", "a.py"], True),
     ]
+
+
+@pytest.mark.parametrize("change", ["modify", "add", "delete", "rename", "noop"])
+@pytest.mark.parametrize("staged", [False, True])
+def test_git_commit_paths_preserves_unrelated_index_changes(
+    change: str,
+    staged: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from cli.clients import git_ops
+
+    monkeypatch.chdir(tmp_path)
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    git("init")
+    git("config", "user.email", "integration@example.test")
+    git("config", "user.name", "Integration Tester")
+    git("config", "commit.gpgsign", "false")
+    selected = tmp_path / "selected.txt"
+    unrelated = tmp_path / "unrelated.txt"
+    unrelated_deleted = tmp_path / "unrelated-deleted.txt"
+    selected.write_text("selected base\n", encoding="utf-8")
+    unrelated.write_text("unrelated base\n", encoding="utf-8")
+    unrelated_deleted.write_text("unrelated deleted base\n", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-m", "initial")
+    before = git("rev-parse", "HEAD")
+
+    unrelated.write_text("unrelated staged\n", encoding="utf-8")
+    unrelated_deleted.unlink()
+    git("add", "unrelated.txt", "unrelated-deleted.txt")
+    unrelated.write_text("unrelated unstaged\n", encoding="utf-8")
+    before_snapshot = git_ops.git_worktree_snapshot()
+    paths = ["selected.txt"]
+    if change == "modify":
+        selected.write_text("selected changed\n", encoding="utf-8")
+    elif change == "add":
+        paths = ["added.txt"]
+        (tmp_path / "added.txt").write_text("added\n", encoding="utf-8")
+    elif change == "delete":
+        selected.unlink()
+    elif change == "rename":
+        selected.rename(tmp_path / "renamed.txt")
+        paths.append("renamed.txt")
+    if staged:
+        git("add", "--", *paths)
+
+    if change != "noop":
+        after_snapshot = git_ops.git_worktree_snapshot()
+        assert set(
+            git_ops.git_changed_paths_since_snapshot(before_snapshot, after_snapshot)
+        ) == set(paths)
+
+    assert git_ops.git_commit_paths("selected changes", paths) is (change != "noop")
+
+    assert git("show", "HEAD:unrelated.txt") == "unrelated base"
+    assert git("show", "HEAD:unrelated-deleted.txt") == "unrelated deleted base"
+    assert git("show", ":unrelated.txt") == "unrelated staged"
+    assert unrelated.read_text(encoding="utf-8") == "unrelated unstaged\n"
+    assert git("status", "--porcelain") == "D  unrelated-deleted.txt\nMM unrelated.txt"
+    if change == "noop":
+        assert git("rev-parse", "HEAD") == before
+    else:
+        assert set(git("diff", "--name-only", "--no-renames", before, "HEAD").splitlines()) == set(
+            paths
+        )
 
 
 def test_git_commit_paths_raises_when_staged_check_errors(
@@ -254,6 +340,8 @@ def test_git_commit_paths_raises_when_staged_check_errors(
         text: bool = True,  # noqa: ARG001
         check: bool = False,  # noqa: ARG001
     ) -> subprocess.CompletedProcess[str]:
+        if args[:3] == ["diff", "--cached", "--name-only"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
         if args[:2] == ["add", "--"]:
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
         if args[:3] == ["diff", "--cached", "--quiet"]:
@@ -652,7 +740,7 @@ def test_git_worktree_snapshot_raises_when_changed_path_probe_fails(
         assert capture_output is True
         assert text is True
         assert check is False
-        if args == ["diff", "--name-only", "--"]:
+        if args == ["diff", "--name-only", "--no-renames", "--"]:
             return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal: no repo")
         raise AssertionError(f"unexpected args: {args}")
 

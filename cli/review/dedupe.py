@@ -7,8 +7,8 @@ from pathlib import Path
 
 from ..core.github_types import IssueCommentLikeProtocol, ReviewLikeProtocol
 from ..core.models import PriorCodexReviewComment, ReviewThreadSnapshot
+from .resume_state import SUMMARY_MARKER
 
-SUMMARY_MARKER = "Codex Autonomous Review:"
 _CURRENT_CODE_BLOCK_RE = re.compile(r"\*\*Current code:\*\*\s*```[^\n]*\n(.*?)```", re.DOTALL)
 
 

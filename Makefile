@@ -1,6 +1,7 @@
-.PHONY: help fmt lint type qa hooks hooks-run
+.PHONY: help fmt lint type qa hooks hooks-run requirements check-requirements
 
 PY_SRC := cli
+UV_EXPORT := uv export --locked --no-dev --no-emit-project --no-hashes --no-header
 
 help:
 	@echo "Targets:"
@@ -10,6 +11,14 @@ help:
 	@echo "  qa    - Run fmt, lint, and type"
 	@echo "  hooks - Install pre-commit hooks"
 	@echo "  hooks-run - Run pre-commit on all files"
+	@echo "  requirements - Export locked runtime dependencies for the Action"
+	@echo "  check-requirements - Check that the runtime export is current"
+
+requirements:
+	$(UV_EXPORT) --output-file requirements.txt
+
+check-requirements:
+	$(UV_EXPORT) | diff -u requirements.txt -
 
 lint:
 	uv run ruff format .

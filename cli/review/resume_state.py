@@ -12,6 +12,7 @@ from ..core.exceptions import ReviewResumeError
 if TYPE_CHECKING:
     from codex.protocol import types as protocol
 
+SUMMARY_MARKER = "Codex Autonomous Review:"
 SUMMARY_METADATA_RE = re.compile(r"<!--\s*codex-review-meta\s+({.*?})\s*-->")
 REVIEW_RESUME_CACHE_VERSION = "v1"
 MAX_INLINE_INCREMENTAL_DIFF_LINES = 500

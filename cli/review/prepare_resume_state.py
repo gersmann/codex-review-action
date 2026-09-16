@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from ..core.config import ReviewConfig
-from .dedupe import SUMMARY_MARKER
 from .resume_state import (
+    SUMMARY_MARKER,
     build_review_resume_outputs,
     extract_current_head_sha,
     find_previous_reviewed_sha,

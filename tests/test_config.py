@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+from pathlib import Path
+
 import pytest
 
 from cli.core.config import ReviewConfig
@@ -9,6 +12,58 @@ from cli.core.exceptions import ConfigurationError
 def test_from_args_rejects_unknown_keys() -> None:
     with pytest.raises(ConfigurationError, match="Unknown configuration arguments"):
         ReviewConfig.from_args(github_token="t", repository="o/r", unknown_flag="x")
+
+
+def test_from_args_overlays_all_fields_including_false_zero_and_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DEBUG_CODEREVIEW", "2")
+    monkeypatch.setenv("STREAM_AGENT_MESSAGES", "1")
+    monkeypatch.setenv("DRY_RUN", "1")
+    monkeypatch.setenv("CODEX_ADDITIONAL_PROMPT", "Environment instructions")
+    monkeypatch.setenv("CODEX_ACT_INSTRUCTIONS", "Environment edit instructions")
+    expected = ReviewConfig(
+        github_token="override-token",
+        repository="override/repository",
+        pr_number=42,
+        mode="act",
+        model_provider="custom-provider",
+        openai_api_key="override-key",
+        model_name="override-model",
+        reasoning_effort="high",
+        web_search_mode="disabled",
+        act_instructions="",
+        debug_level=0,
+        stream_output=False,
+        dry_run=False,
+        additional_prompt="",
+        repo_root=tmp_path,
+        context_dir_name="",
+        allowed_commenter_associations=("OWNER",),
+    )
+
+    assert ReviewConfig.from_args(**asdict(expected), ignored_unknown=None) == expected
+
+
+@pytest.mark.parametrize("associations", ["owner, collaborator", [" owner ", "collaborator"]])
+def test_from_args_preserves_boundary_normalization_and_ignores_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, associations: str | list[str]
+) -> None:
+    monkeypatch.setenv("CODEX_MODEL", "environment-model")
+    config = ReviewConfig.from_args(
+        github_token="token",
+        repository="owner/repo",
+        pr_number=1,
+        model_name=None,
+        openai_api_key=" test-key ",
+        repo_root=str(tmp_path),
+        allowed_commenter_associations=associations,
+    )
+
+    assert config.model_name == "environment-model"
+    assert config.openai_api_key == "test-key"
+    assert config.repo_root == tmp_path.resolve()
+    assert config.allowed_commenter_associations == ("OWNER", "COLLABORATOR")
 
 
 def test_from_args_overrides_known_values_without_environment() -> None:

@@ -60,9 +60,10 @@ jobs:
               let newTag;
               // Try creating v1.N; if it exists, bump N until it works (up to 20 tries)
               for (let i = 0; i < 20; i++) {
-                newTag = `v1.${nextN}`;
+                const candidateTag = `v1.${nextN}`;
                 try {
-                  await github.rest.git.createRef({ owner, repo, ref: `refs/tags/${newTag}`, sha: targetSha });
+                  await github.rest.git.createRef({ owner, repo, ref: `refs/tags/${candidateTag}`, sha: targetSha });
+                  newTag = candidateTag;
                   core.info(`Created refs/tags/${newTag} -> ${targetSha}`);
                   break;
                 } catch (e) {
@@ -70,7 +71,7 @@ jobs:
                     nextN += 1;
                     continue;
                   }
-                  core.setFailed(`Failed creating tag ${newTag}: ${e.message}`);
+                  core.setFailed(`Failed creating tag ${candidateTag}: ${e.message}`);
                   return;
                 }
               }

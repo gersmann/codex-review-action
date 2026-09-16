@@ -28,7 +28,6 @@ from ..review.anchor_engine import build_anchor_maps
 from ..review.artifacts import ReviewArtifacts
 from ..review.context_manager import ReviewContextWriter
 from ..review.dedupe import (
-    SUMMARY_MARKER,
     collect_codex_author_logins,
     collect_prior_codex_review_comments,
     render_prior_codex_comments_for_prompt,
@@ -41,6 +40,7 @@ from ..review.posting import (
 )
 from ..review.resume_state import (
     MAX_INLINE_INCREMENTAL_DIFF_LINES,
+    SUMMARY_MARKER,
     load_latest_thread_id,
     parse_reviewed_head_sha,
     render_review_summary_metadata,
@@ -521,10 +521,11 @@ class ReviewWorkflow:
             self._debug(1, "DRY_RUN: would refresh summary issue comment")
             return
 
-        delete_warnings = self._delete_prior_summary(pr)
+        prior_comments = list(pr.get_issue_comments())
+        pr.as_issue().create_comment(summary)
+        delete_warnings = self._delete_prior_summary(prior_comments)
         for warning in delete_warnings:
             print(warning, file=sys.stderr)
-        pr.as_issue().create_comment(summary)
 
     def process_review(self, pr_number: int) -> ReviewWorkflowResult:
         """Process a code review for the given pull request."""
@@ -657,10 +658,9 @@ class ReviewWorkflow:
             post_result=post_result,
         )
 
-    def _delete_prior_summary(self, pr: PullRequestLikeProtocol) -> list[str]:
-        """Delete prior Codex summary issue comments."""
+    def _delete_prior_summary(self, comments: list[IssueCommentLikeProtocol]) -> list[str]:
+        """Delete Codex summaries captured before publishing their replacement."""
         warnings: list[str] = []
-        comments = list(pr.get_issue_comments())
         for comment in comments:
             comment_body = comment.body
             body = comment_body.strip() if isinstance(comment_body, str) else ""

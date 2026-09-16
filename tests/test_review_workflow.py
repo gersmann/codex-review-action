@@ -232,6 +232,38 @@ def _make_config(tmp_path: Path, *, dry_run: bool = False) -> ReviewConfig:
     )
 
 
+@pytest.mark.parametrize("publication_fails", [False, True])
+def test_summary_replacement_preserves_checkpoint_until_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, publication_fails: bool
+) -> None:
+    prior_summary = _FakeIssueComment(
+        f"{SUMMARY_MARKER}\n{render_review_summary_metadata('previous-sha')}",
+    )
+    unrelated_comment = _FakeIssueComment("Human discussion")
+    replacement = _FakeIssueComment(f"{SUMMARY_MARKER}\nnew summary", comment_id=2)
+    pr: Any = _FakePR(issue_comments=[prior_summary, unrelated_comment])
+    workflow = ReviewWorkflow(_make_config(tmp_path))
+
+    def publish(text: str) -> None:
+        assert text == replacement.body
+        assert not prior_summary.deleted
+        if publication_fails:
+            raise RuntimeError("Publication failed")
+        pr._issue_comments.append(replacement)
+
+    monkeypatch.setattr(pr.as_issue(), "create_comment", publish)
+
+    if publication_fails:
+        with pytest.raises(RuntimeError, match="Publication failed"):
+            workflow._publish_summary(pr, replacement.body)
+    else:
+        workflow._publish_summary(pr, replacement.body)
+
+    assert prior_summary.deleted is not publication_fails
+    assert not replacement.deleted
+    assert not unrelated_comment.deleted
+
+
 def test_process_review_posts_summary_and_passes_dedupe_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

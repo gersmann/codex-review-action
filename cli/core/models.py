@@ -1,8 +1,21 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, field, fields
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar
+
+from pydantic import (
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    Strict,
+    StrictStr,
+    TypeAdapter,
+    ValidationError,
+    with_config,
+)
+from typing_extensions import TypedDict
 
 from .exceptions import ReviewContractError
 
@@ -100,68 +113,75 @@ class ReviewFindingLocation:
         }
 
 
+# Input tolerates extra fields; generated output is a closed, fully populated object.
+_REVIEW_CONFIG = ConfigDict(
+    extra="ignore",
+    json_schema_extra={"additionalProperties": False},
+    json_schema_serialization_defaults_required=True,
+)
+
+
+@with_config(_REVIEW_CONFIG)
+class _ReviewLineRange(TypedDict):
+    start: int
+    end: int
+
+
+@with_config(_REVIEW_CONFIG)
+class _ReviewLocationPayload(TypedDict):
+    absolute_file_path: str
+    line_range: _ReviewLineRange
+
+
+def _boolean_as_number(value: object) -> object:
+    return int(value) if isinstance(value, bool) else value
+
+
+def _review_object(value: object) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("must be an object")
+    return dict(value)
+
+
+def _review_location(value: object) -> ReviewFindingLocation:
+    location = ReviewFindingLocation.from_mapping(_review_object(value))
+    if location is None:
+        raise ValueError("invalid finding location")
+    return location
+
+
+_ReviewFloat = Annotated[float, Strict(), BeforeValidator(_boolean_as_number)]
+_ReviewInt = Annotated[int, Strict(), BeforeValidator(_boolean_as_number)]
+
+
 @dataclass(frozen=True)
 class ReviewFinding:
-    title: str
-    body: str
-    confidence_score: float | None
-    priority: int | None
-    code_location: ReviewFindingLocation
+    __pydantic_config__: ClassVar[ConfigDict] = _REVIEW_CONFIG
+
+    title: StrictStr
+    body: StrictStr
+    confidence_score: _ReviewFloat | None
+    priority: _ReviewInt | None
+    code_location: Annotated[
+        ReviewFindingLocation,
+        BeforeValidator(_review_location),
+        PlainSerializer(ReviewFindingLocation.as_dict, return_type=_ReviewLocationPayload),
+    ]
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> ReviewFinding:
-        required_fields = {"title", "body", "confidence_score", "priority", "code_location"}
-        missing_fields = sorted(required_fields - set(payload.keys()))
+        missing_fields = sorted({item.name for item in fields(cls)} - payload.keys())
         if missing_fields:
             raise ReviewContractError(
                 "Review finding missing required fields: " + ", ".join(missing_fields)
             )
-
-        title_raw = payload.get("title")
-        if not isinstance(title_raw, str):
-            raise ReviewContractError("Review finding field 'title' must be a string")
-
-        body_raw = payload.get("body")
-        if not isinstance(body_raw, str):
-            raise ReviewContractError("Review finding field 'body' must be a string")
-
-        confidence_raw = payload.get("confidence_score")
-        if confidence_raw is not None and not isinstance(confidence_raw, (int, float)):
-            raise ReviewContractError(
-                "Review finding field 'confidence_score' must be a number or null"
-            )
-        confidence_score = (
-            float(confidence_raw) if isinstance(confidence_raw, (int, float)) else None
-        )
-
-        priority_raw = payload.get("priority")
-        if priority_raw is not None and not isinstance(priority_raw, int):
-            raise ReviewContractError("Review finding field 'priority' must be an integer or null")
-        priority = int(priority_raw) if isinstance(priority_raw, int) else None
-
-        code_location_raw = payload.get("code_location")
-        if not isinstance(code_location_raw, Mapping):
-            raise ReviewContractError("Review finding field 'code_location' must be an object")
-        code_location = ReviewFindingLocation.from_mapping(code_location_raw)
-        if code_location is None:
-            raise ReviewContractError("Review finding field 'code_location' is invalid")
-
-        return cls(
-            title=title_raw,
-            body=body_raw,
-            confidence_score=confidence_score,
-            priority=priority,
-            code_location=code_location,
-        )
+        try:
+            return _FINDING_ADAPTER.validate_python(dict(payload))
+        except ValidationError as exc:
+            raise ReviewContractError(f"Invalid review finding: {exc}") from exc
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "title": self.title,
-            "body": self.body,
-            "confidence_score": self.confidence_score,
-            "priority": self.priority,
-            "code_location": self.code_location.as_dict(),
-        }
+        return _FINDING_ADAPTER.dump_python(self)
 
 
 @dataclass(frozen=True)
@@ -181,8 +201,10 @@ class PriorCodexReviewComment:
 class CarriedForwardReviewComment:
     """Prior Codex review comment re-adjudicated as still applicable."""
 
-    comment_id: str
-    current_evidence: str
+    __pydantic_config__: ClassVar[ConfigDict] = _REVIEW_CONFIG
+
+    comment_id: StrictStr
+    current_evidence: StrictStr
 
 
 @dataclass(frozen=True)
@@ -312,176 +334,43 @@ class InlineCommentPayload:
 class ReviewRunResult:
     """Typed view of model output for a review run."""
 
-    overall_correctness: str
-    overall_explanation: str
-    overall_confidence_score: float | None
-    findings: list[ReviewFinding]
-    carried_forward: list[CarriedForwardReviewComment] = field(default_factory=list)
+    __pydantic_config__: ClassVar[ConfigDict] = _REVIEW_CONFIG
+
+    overall_correctness: StrictStr
+    overall_explanation: StrictStr
+    overall_confidence_score: _ReviewFloat | None
+    findings: Annotated[
+        list[Annotated[ReviewFinding, BeforeValidator(_review_object)]], Field(strict=True)
+    ]
+    carried_forward: Annotated[
+        list[Annotated[CarriedForwardReviewComment, BeforeValidator(_review_object)]],
+        Field(strict=True),
+    ] = field(default_factory=list)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> ReviewRunResult:
-        required_fields = {
-            "findings",
-            "carried_forward",
-            "overall_correctness",
-            "overall_explanation",
-            "overall_confidence_score",
-        }
-        missing_fields = sorted(required_fields - set(payload.keys()))
+        # Internal constructors may use defaults; external output must include every field.
+        missing_fields = sorted({item.name for item in fields(cls)} - payload.keys())
         if missing_fields:
             raise ReviewContractError(
                 "Review output missing required fields: " + ", ".join(missing_fields)
             )
-
-        findings_raw = payload.get("findings")
-        if not isinstance(findings_raw, list):
-            raise ReviewContractError("Review output field 'findings' must be an array")
-        findings: list[ReviewFinding] = []
-        for index, item in enumerate(findings_raw):
-            if not isinstance(item, Mapping):
-                raise ReviewContractError(
-                    f"Review output finding at index {index} must be an object"
-                )
-            findings.append(ReviewFinding.from_mapping(item))
-
-        overall_correctness_raw = payload.get("overall_correctness")
-        if not isinstance(overall_correctness_raw, str):
-            raise ReviewContractError("Review output field 'overall_correctness' must be a string")
-        overall_correctness = overall_correctness_raw
-
-        overall_explanation_raw = payload.get("overall_explanation")
-        if not isinstance(overall_explanation_raw, str):
-            raise ReviewContractError("Review output field 'overall_explanation' must be a string")
-        overall_explanation = overall_explanation_raw
-
-        confidence_raw = payload.get("overall_confidence_score")
-        if confidence_raw is not None and not isinstance(confidence_raw, (int, float)):
-            raise ReviewContractError(
-                "Review output field 'overall_confidence_score' must be a number or null"
-            )
-        overall_confidence_score = (
-            float(confidence_raw) if isinstance(confidence_raw, (int, float)) else None
-        )
-        carried_forward_raw = payload.get("carried_forward")
-        if not isinstance(carried_forward_raw, list):
-            raise ReviewContractError("Review output field 'carried_forward' must be an array")
-        carried_forward: list[CarriedForwardReviewComment] = []
-        for index, item in enumerate(carried_forward_raw):
-            if not isinstance(item, Mapping):
-                raise ReviewContractError(
-                    f"Review output field 'carried_forward' item at index {index} must be an object"
-                )
-            comment_id = item.get("comment_id")
-            if not isinstance(comment_id, str):
-                raise ReviewContractError(
-                    "Review output field 'carried_forward' "
-                    f"item at index {index} must include string field 'comment_id'"
-                )
-            current_evidence = item.get("current_evidence")
-            if not isinstance(current_evidence, str):
-                raise ReviewContractError(
-                    "Review output field 'carried_forward' "
-                    f"item at index {index} must include string field 'current_evidence'"
-                )
-            carried_forward.append(
-                CarriedForwardReviewComment(
-                    comment_id=comment_id,
-                    current_evidence=current_evidence,
-                )
-            )
-        return cls(
-            overall_correctness=overall_correctness,
-            overall_explanation=overall_explanation,
-            overall_confidence_score=overall_confidence_score,
-            findings=findings,
-            carried_forward=carried_forward,
-        )
+        try:
+            return _REVIEW_ADAPTER.validate_python(dict(payload))
+        except ValidationError as exc:
+            raise ReviewContractError(f"Invalid review output: {exc}") from exc
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "overall_correctness": self.overall_correctness,
-            "overall_explanation": self.overall_explanation,
-            "overall_confidence_score": self.overall_confidence_score,
-            "findings": [finding.as_dict() for finding in self.findings],
-            "carried_forward": [
-                {
-                    "comment_id": item.comment_id,
-                    "current_evidence": item.current_evidence,
-                }
-                for item in self.carried_forward
-            ],
-        }
+        return _REVIEW_ADAPTER.dump_python(self)
 
     @property
     def carried_forward_comment_ids(self) -> list[str]:
         return [item.comment_id for item in self.carried_forward]
 
 
-REVIEW_OUTPUT_SCHEMA: dict[str, object] = {
-    "type": "object",
-    "properties": {
-        "findings": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "body": {"type": "string"},
-                    "confidence_score": {"type": ["number", "null"]},
-                    "priority": {"type": ["integer", "null"]},
-                    "code_location": {
-                        "type": "object",
-                        "properties": {
-                            "absolute_file_path": {"type": "string"},
-                            "line_range": {
-                                "type": "object",
-                                "properties": {
-                                    "start": {"type": "integer"},
-                                    "end": {"type": "integer"},
-                                },
-                                "required": ["start", "end"],
-                                "additionalProperties": False,
-                            },
-                        },
-                        "required": ["absolute_file_path", "line_range"],
-                        "additionalProperties": False,
-                    },
-                },
-                "required": [
-                    "title",
-                    "body",
-                    "confidence_score",
-                    "priority",
-                    "code_location",
-                ],
-                "additionalProperties": False,
-            },
-        },
-        "carried_forward": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "comment_id": {"type": "string"},
-                    "current_evidence": {"type": "string"},
-                },
-                "required": ["comment_id", "current_evidence"],
-                "additionalProperties": False,
-            },
-        },
-        "overall_correctness": {"type": "string"},
-        "overall_explanation": {"type": "string"},
-        "overall_confidence_score": {"type": ["number", "null"]},
-    },
-    "required": [
-        "findings",
-        "carried_forward",
-        "overall_correctness",
-        "overall_explanation",
-        "overall_confidence_score",
-    ],
-    "additionalProperties": False,
-}
+_FINDING_ADAPTER = TypeAdapter(ReviewFinding)
+_REVIEW_ADAPTER = TypeAdapter(ReviewRunResult)
+REVIEW_OUTPUT_SCHEMA: dict[str, object] = _REVIEW_ADAPTER.json_schema(mode="serialization")
 
 
 def _as_int(value: Any, default: int) -> int:

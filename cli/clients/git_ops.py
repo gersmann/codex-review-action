@@ -85,13 +85,35 @@ def git_setup_identity() -> None:
 
 
 def git_commit_paths(message: str, paths: Sequence[str]) -> bool:
-    """Stage selected paths and commit, returning True when a commit was created."""
+    """Commit only selected paths, preserving unrelated staged changes."""
     normalized_paths = [path for path in paths if path]
     if not normalized_paths:
         return False
 
-    _run_git(["add", "--", *normalized_paths], check=True)
-    staged_check = _run_git(["diff", "--cached", "--quiet"])
+    deleted_result = _run_git(
+        [
+            "diff",
+            "--cached",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=D",
+            "-z",
+            "--",
+            *normalized_paths,
+        ],
+        capture_output=True,
+        check=True,
+    )
+    staged_deletions = set(deleted_result.stdout.split("\0"))
+    # Already-staged deletions no longer exist in the index for `git add`.
+    paths_to_stage = [
+        path
+        for path in normalized_paths
+        if path not in staged_deletions or Path(path).exists() or Path(path).is_symlink()
+    ]
+    if paths_to_stage:
+        _run_git(["add", "--", *paths_to_stage], check=True)
+    staged_check = _run_git(["diff", "--cached", "--quiet", "--", *normalized_paths])
     if staged_check.returncode == 0:
         return False
     if staged_check.returncode > 1:
@@ -102,7 +124,7 @@ def git_commit_paths(message: str, paths: Sequence[str]) -> bool:
             staged_check.stderr,
         )
 
-    _run_git(["commit", "-m", message], check=True)
+    _run_git(["commit", "--only", "-m", message, "--", *normalized_paths], check=True)
     return True
 
 
@@ -393,8 +415,8 @@ def git_head_is_ahead(branch: str | None) -> bool:
 def _collect_changed_paths() -> set[str]:
     paths: set[str] = set()
     commands = [
-        ["diff", "--name-only", "--"],
-        ["diff", "--cached", "--name-only", "--"],
+        ["diff", "--name-only", "--no-renames", "--"],
+        ["diff", "--cached", "--name-only", "--no-renames", "--"],
         ["ls-files", "--others", "--exclude-standard"],
     ]
 

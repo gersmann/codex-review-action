@@ -153,12 +153,14 @@ class CodexClient:
         stream_enabled = self._should_stream(suppress_stream)
 
         try:
-            thread = self._start_or_resume_thread(
-                model_name=model_name,
-                sandbox_mode=sandbox_mode,
-                resume_thread_id=resume_thread_id,
-            )
-            return session_runner(thread, effort, stream_enabled)
+            with self._make_codex_client() as codex_client:
+                thread = self._start_or_resume_thread(
+                    codex_client=codex_client,
+                    model_name=model_name,
+                    sandbox_mode=sandbox_mode,
+                    resume_thread_id=resume_thread_id,
+                )
+                return session_runner(thread, effort, stream_enabled)
         except ThreadRunError as run_err:
             raise CodexExecutionError(f"Codex execution failed: {run_err}") from run_err
         except CodexExecutionError:
@@ -456,13 +458,13 @@ class CodexClient:
     def _start_or_resume_thread(
         self,
         *,
+        codex_client: Codex,
         model_name: str | None,
         sandbox_mode: str,
         resume_thread_id: str | None,
     ) -> Thread:
         resolved_sandbox_mode = self._normalize_sandbox_mode(sandbox_mode, "read-only")
         resolved_model_name = self._resolved_model_name(model_name)
-        codex_client = self._make_codex_client()
         if resume_thread_id:
             try:
                 self._debug(1, f"Attempting to resume Codex thread {resume_thread_id}")
