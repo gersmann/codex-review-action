@@ -24,7 +24,7 @@ jobs:
     steps:
       - name: Prepare forced version commit (Release-As)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_as != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: main
@@ -45,7 +45,7 @@ jobs:
         run: echo "Release-As commit pushed; push-triggered run will cut the release."
       - name: Release Please
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.release_as != '') }}
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@v5
         with:
           # Use manifest mode so we can evolve to multi-package later
           config-file: .github/release-please-config.json

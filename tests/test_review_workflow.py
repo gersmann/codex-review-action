@@ -596,20 +596,20 @@ def test_process_review_matches_github_bot_logins_across_issue_and_thread_apis(
         "  steps:\n"
         "    - name: Save review Codex cache\n"
         "      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' && !(steps.review_codex_cache.outputs.cache-hit == 'true' && steps.review_resume_state.outputs.restore_key == steps.review_resume_state.outputs.current_cache_key) }}\n"
-        "      uses: actions/cache/save@v4\n",
+        "      uses: actions/cache/save@v6\n",
         encoding="utf-8",
     )
     stale_body = (
         "**Current code:**\n```yaml\n"
         "    - name: Save review Codex cache\n"
         "      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' }}\n"
-        "      uses: actions/cache/save@v4\n"
+        "      uses: actions/cache/save@v6\n"
         "```\n\n"
         "**Problem:** stale.\n\n"
         "**Fix:**\n```yaml\n"
         "    - name: Save review Codex cache\n"
         "      if: ${{ inputs.mode == 'review' && steps.run_codex_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' && !(steps.review_codex_cache.outputs.cache-hit == 'true' && steps.review_resume_state.outputs.restore_key == steps.review_resume_state.outputs.current_cache_key) }}\n"
-        "      uses: actions/cache/save@v4\n"
+        "      uses: actions/cache/save@v6\n"
         "```\n\n---"
     )
     pr = _FakePR(

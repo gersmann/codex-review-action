@@ -6,9 +6,9 @@ description = "GitHub Action for Codex autonomous PR reviews and edits"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "codex-python==1.145.0",
-  "pydantic==2.12.5",
-  "PyGithub==2.8.1",
+  "codex-python==1.153.4",
+  "pydantic==2.13.5",
+  "PyGithub==2.10.0",
 ]
 
 [tool.uv]
